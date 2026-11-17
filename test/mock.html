@@ -40,6 +40,10 @@ document.querySelectorAll('[role=tab]').forEach(function (t) {
     window.__tab = t.textContent;
   });
 });
+// Like X's Home icon: on Home it reloads the feed instead of navigating.
+document.querySelector('[data-testid=AppTabBar_Home_Link]').addEventListener('click', function (e) {
+  if (location.pathname === '/home') { e.preventDefault(); window.__homeRefresh = (window.__homeRefresh || 0) + 1; }
+});
 document.getElementById('c5').querySelector('[data-testid=tweetText]').insertAdjacentHTML('afterend','<div data-testid="card.wrapper"><a href="/i/spaces/1abc">LIVE Space: big talk</a><span>420 listening</span></div>');
 document.getElementById('c0').insertAdjacentHTML('beforebegin','<div data-testid="cellInnerDiv" id="livebar"><div class="live"><div role="button">+2.6K · NVIDIA EARNINGS LIVE</div><div role="button">+1.7K · Another live one</div></div></div>');
 document.getElementById('c0').insertAdjacentHTML('beforebegin','<div data-testid="cellInnerDiv" id="spacebar"><div><a href="/i/spaces/2def">Live now</a> <a href="/i/spaces/3ghi">Another space</a></div></div>');

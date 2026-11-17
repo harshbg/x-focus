@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.4.0
+// @version      2.5.0
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.4.0';
+  var VERSION = '2.5.0';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -86,6 +86,10 @@
     // Out of the way but still laid out, so X keeps handling its tabs.
     'html[data-xf-nav][data-xf-onhome]:not([data-xf-tabsshow]) [data-xf-tabs]{position:absolute!important;top:0!important;' +
       'left:0!important;right:0!important;opacity:0!important;pointer-events:none!important;z-index:-1!important}',
+    // For a real tap the (still invisible) strip is pinned just below the timer, on top.
+    'html[data-xf-nav][data-xf-onhome][data-xf-tabtap]:not([data-xf-tabsshow]) [data-xf-tabs]{position:fixed!important;' +
+      'top:var(--xf-h,0px)!important;pointer-events:auto!important;z-index:2147483000!important}',
+    'html[data-xf-nav][data-xf-xbar] [data-testid="BottomBar"]{display:flex!important}',
     'video,' + PLAYER_SEL + '{display:none!important}',
     '[data-xf-video]{' + STUB_BOX + ';position:relative!important;margin:4px 0!important}',
     '[data-xf-video]>*{display:none!important}',
@@ -507,10 +511,55 @@
     cur.setAttribute('data-xf-tabs', '');
   }
 
-  var tabsShown = false, lastTabTry = '';
+  var tabsShown = false, lastTabTry = '', navLog = [];
+  function logNav(msg) {
+    navLog.push((Date.now() % 100000 / 1000).toFixed(1) + 's ' + msg);
+    if (navLog.length > 14) navLog.shift();
+  }
 
-  // A tap as X's buttons expect it: pointer and mouse down/up, then click,
-  // on the innermost element, so a handler on any wrapper inside the tab fires.
+  function short(el) {
+    if (!el) return 'none';
+    if (el === host) return 'X Focus';
+    var t = el.getAttribute('data-testid'), r = el.getAttribute('role');
+    return el.tagName.toLowerCase() + (t ? '[' + t + ']' : '') + (r ? '(' + r + ')' : '') +
+      (el.childElementCount ? '' : ' "' + (el.textContent || '').trim().slice(0, 20) + '"');
+  }
+
+  // Normally the document scrolls; follow X if it scrolls something else.
+  function feedScroller() {
+    var se = document.scrollingElement || document.documentElement;
+    if (se.scrollHeight > se.clientHeight + 50) return se;
+    var cell = document.querySelector('[data-testid="primaryColumn"] [data-testid="cellInnerDiv"]');
+    for (var el = cell && cell.parentElement; el && el !== document.body; el = el.parentElement) {
+      var oy = window.getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 50) return el;
+    }
+    return se;
+  }
+  function scrollTopNow() { return feedScroller().scrollTop; }
+  function toTop() {
+    try { feedScroller().scrollTop = 0; } catch (e) {}
+    try { window.scrollTo(0, 0); } catch (e2) {}
+  }
+
+  // A real tap from the app: the phone's own touch input at a point on the page.
+  function canNativeTap() { return !!(NATIVE && typeof NATIVE.tap === 'function'); }
+  function nativeTapAt(x, y) {
+    var dpr = window.devicePixelRatio || 1;
+    try { return NATIVE.tap(x * dpr, y * dpr) !== false; } catch (e) { return false; }
+  }
+
+  // The visible middle of an element, or null when it is off screen.
+  function pointOf(el) {
+    var r = el.getBoundingClientRect();
+    var l = Math.max(r.left, 4), rt = Math.min(r.right, window.innerWidth - 4);
+    var t = Math.max(r.top, 0), b = Math.min(r.bottom, window.innerHeight);
+    if (rt - l < 8 || b - t < 4) return null;
+    return { x: (l + rt) / 2, y: (t + b) / 2 };
+  }
+
+  // Synthetic tap: pointer and mouse down/up, then click, on the innermost element,
+  // so a handler on any wrapper inside the tab fires.
   function pressTab(tab) {
     var spans = tab.querySelectorAll('span');
     var target = spans.length ? spans[spans.length - 1] : tab;
@@ -538,35 +587,103 @@
     return !!t && t.getAttribute('aria-selected') === 'true';
   }
 
-  function clickTab(i, attempt) {
+  function tryTab(i, method) {
+    var tab = homeTabs()[i];
+    if (!tab) return false;
+    if (method === 'native') {
+      flag('data-xf-tabtap', true);
+      try { tab.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (e) {}
+      var pt = pointOf(tab), hit = pt && document.elementFromPoint(pt.x, pt.y);
+      var ok = !!(hit && tab.contains(hit)) && nativeTapAt(pt.x, pt.y);
+      setTimeout(function () { flag('data-xf-tabtap', false); }, 600);
+      logNav('tab ' + i + ' real tap at ' + (pt ? Math.round(pt.x) + ',' + Math.round(pt.y) : '-') +
+        ' on ' + short(hit) + (ok ? '' : ' (not sent)'));
+      return ok;
+    }
+    if (method === 'click') tab.click();
+    else pressTab(tab);
+    logNav('tab ' + i + ' ' + method);
+    return true;
+  }
+
+  // Switches the Home timeline to tab i, trying a real tap first when the app offers it.
+  function selectTab(i) {
     var tabs = homeTabs();
-    if (!tabs.length) return false;
+    if (!tabs.length) { logNav('no tabs on the page'); return false; }
     if (i >= tabs.length) {
       note(i === 2 ? 'Pin a list in X to use this button' : 'That tab is missing');
       return true;
     }
-    attempt = attempt || 1;
-    if (attempt === 2) { tabsShown = true; flag('data-xf-tabsshow', true); }
-    pressTab(tabs[i]);
-    try { window.scrollTo(0, 0); } catch (e) {}
-    setTimeout(function () {
-      var ok = tabSelected(i);
-      lastTabTry = 'tab ' + i + ', try ' + attempt + ': ' + (ok ? 'switched' : 'no change');
-      if (attempt === 2) {
-        setTimeout(function () { tabsShown = false; flag('data-xf-tabsshow', false); }, 400);
-        if (!ok) note('Could not switch tabs. Settings \u2192 Copy page details');
-      } else if (!ok) {
-        clickTab(i, 2);
+    toTop();
+    var methods = (canNativeTap() ? ['native'] : []).concat(['press', 'click']);
+    (function next(k) {
+      if (k >= methods.length) {
+        lastTabTry = 'tab ' + i + ': nothing worked';
+        note('Could not switch tabs. Settings → Copy page details');
+        return;
       }
-      if (bar && loaded) render();
-    }, 600);
+      setTimeout(function () {
+        if (!tryTab(i, methods[k])) { next(k + 1); return; }
+        setTimeout(function () {
+          if (!tabSelected(i)) { next(k + 1); return; }
+          lastTabTry = 'tab ' + i + ': switched by ' + methods[k];
+          toTop();
+          if (bar && loaded) render();
+        }, 700);
+      }, k === 0 ? 300 : 0);
+    })(0);
     return true;
   }
 
+  // X's "Show 12 posts" button above the feed, when new posts are waiting.
+  function newPostsButton() {
+    var col = document.querySelector('[data-testid="primaryColumn"]') || document.body;
+    var btns = col.querySelectorAll('[role="button"], button');
+    for (var i = 0; i < btns.length && i < 300; i++) {
+      var t = (btns[i].textContent || '').trim(), a = btns[i].getAttribute('aria-label') || '';
+      if (/^show \d[\d,.]*[km]? (new )?posts?$/i.test(t) || /new posts/i.test(a)) return btns[i];
+    }
+    return null;
+  }
+
+  // Loads new posts the way X's own Home icon does.
+  function refreshFeed() {
+    var pill = newPostsButton();
+    if (pill) { pill.click(); logNav('home: new posts button'); return; }
+    var link = document.querySelector('[data-testid="AppTabBar_Home_Link"]');
+    if (!link) { logNav('home: no X home link'); return; }
+    note('Checking for new posts');
+    if (!canNativeTap()) { link.click(); logNav('home: X home link click'); return; }
+    flag('data-xf-xbar', true);
+    navEl.style.visibility = 'hidden';
+    setTimeout(function () {
+      var pt = pointOf(link), hit = pt && document.elementFromPoint(pt.x, pt.y);
+      var ok = !!(hit && link.contains(hit)) && nativeTapAt(pt.x, pt.y);
+      logNav('home: real tap on X home at ' + (pt ? Math.round(pt.x) + ',' + Math.round(pt.y) : '-') +
+        ' on ' + short(hit) + (ok ? '' : ' (not sent)'));
+      setTimeout(function () {
+        flag('data-xf-xbar', false);
+        navEl.style.visibility = '';
+        if (!ok) link.click();
+      }, 400);
+    }, 80);
+  }
+
+  // Home: For you, scrolled to the first post; tapped again at the top, new posts.
+  function goHome() {
+    if (homeTabs().length && !tabSelected(0)) { selectTab(0); return; }
+    if (scrollTopNow() > 10) { toTop(); logNav('home: to top'); return; }
+    refreshFeed();
+  }
+
   function openTab(i) {
-    if (mode) return;
+    if (mode) { logNav('button ' + i + ' ignored: ' + mode + ' screen up'); return; }
     endPeek();
-    if (window.location.pathname === '/home' && clickTab(i)) { render(); return; }
+    if (window.location.pathname === '/home') {
+      if (i === 0) { goHome(); render(); return; }
+      if (selectTab(i)) { render(); return; }
+    }
+    logNav('loading Home for tab ' + i);
     pendingTab = { i: i, until: Date.now() + 8000 };
     try { window.sessionStorage.setItem(PENDING_TAB, String(i)); } catch (e) {}
     if (window.location.pathname !== '/home') {
@@ -586,11 +703,41 @@
     }
     if (!pendingTab) return;
     var done = Date.now() > pendingTab.until ||
-      (window.location.pathname === '/home' && clickTab(pendingTab.i));
+      (window.location.pathname === '/home' && selectTab(pendingTab.i));
     if (!done) return;
     pendingTab = null;
     try { window.sessionStorage.removeItem(PENDING_TAB); } catch (e) {}
     if (bar && loaded) render();
+  }
+
+  // Taps on the three buttons are taken at the window, before X's own handlers.
+  var lastNavTap = 0, navTouches = 0, navClicks = 0;
+  function navIndexOf(e) {
+    if (!navEl || navEl.hidden) return -1;
+    var path = e.composedPath ? e.composedPath() : [];
+    for (var k = 0; k < path.length && k < 8; k++) {
+      for (var j = 0; j < navBtns.length; j++) if (path[k] === navBtns[j].el) return j;
+    }
+    return -1;
+  }
+  function listenForNav() {
+    function guard(e) { if (navIndexOf(e) >= 0) e.stopPropagation(); }
+    function onTap(e, kind) {
+      var i = navIndexOf(e);
+      if (i < 0) return;
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      if (kind === 'touch') navTouches++; else navClicks++;
+      if (Date.now() - lastNavTap < 450) return;
+      lastNavTap = Date.now();
+      logNav('button ' + i + ' tapped (' + kind + ')');
+      openTab(i);
+    }
+    ['touchstart', 'pointerdown', 'mousedown', 'pointerup', 'mouseup'].forEach(function (t) {
+      window.addEventListener(t, guard, true);
+    });
+    window.addEventListener('touchend', function (e) { onTap(e, 'touch'); }, { capture: true, passive: false });
+    window.addEventListener('click', function (e) { onTap(e, 'click'); }, true);
   }
 
   function isHScroller(el) {
@@ -1005,7 +1152,7 @@
     navEl = h('div', { class: 'nav', role: 'navigation', 'aria-label': 'Timelines', hidden: '' });
     navBtns = [0, 1, 2].map(function (i) {
       var label = h('span', { text: '' });
-      var b = h('button', { type: 'button', onclick: function () { openTab(i); } }, [navIcon(i), label]);
+      var b = h('button', { type: 'button', 'aria-label': ['Home', 'Following', 'List'][i] }, [navIcon(i), label]);
       navEl.appendChild(b);
       return { el: b, label: label };
     });
@@ -1361,7 +1508,16 @@
     L.push('X Focus ' + VERSION + ' path=' + window.location.pathname + ' scrollY=' + Math.round(window.scrollY) +
       ' view=' + window.innerWidth + 'x' + window.innerHeight + ' bar=' + barH + ' nav=' + navH +
       ' app=' + !!NATIVE + ' gapFixes=' + gapFixes.length);
-    L.push('last tab press: ' + (lastTabTry || 'none'));
+    L.push('last tab press: ' + (lastTabTry || 'none') + ' | real taps: ' + canNativeTap() +
+      ' | button touches ' + navTouches + ', clicks ' + navClicks + ' | tabs ' + homeTabs().length +
+      ' | scroller ' + short(feedScroller()) + ' top=' + Math.round(scrollTopNow()));
+    L.push('== what the three buttons did');
+    navLog.forEach(function (m) { L.push(m); });
+    L.push('== what is under each button');
+    navBtns.forEach(function (b, i) {
+      var pt = pointOf(b.el);
+      L.push(i + ': ' + (pt ? (document.elementsFromPoint(pt.x, pt.y) || []).slice(0, 4).map(short).join(' > ') : 'not on screen'));
+    });
     var list = homeTablist();
     L.push('== tab strip and its parents');
     for (e = list, n = 0; e && e !== document.documentElement && n < 16; e = e.parentElement, n++) L.push(describe(e));
@@ -1792,6 +1948,7 @@
     });
     window.addEventListener('pagehide', save);
     listenForPress();
+    listenForNav();
 
     setInterval(tick, 1000);
     setInterval(function () {

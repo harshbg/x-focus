@@ -12,6 +12,9 @@ import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
@@ -61,6 +64,13 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private ValueCallback<Uri[]> fileCallback;
 
+    // Real taps the script may ask for: only right after the user lifts a finger
+    // in the bottom quarter of the screen (where the three buttons are), and only a few.
+    private volatile long lastUserUp;
+    private volatile float lastUserUpFrac;
+    private volatile int tapsLeft;
+    private boolean synthesizing;
+
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -94,6 +104,18 @@ public class MainActivity extends Activity {
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(web, true);
+
+        web.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent ev) {
+                if (!synthesizing && ev.getActionMasked() == MotionEvent.ACTION_UP && v.getHeight() > 0) {
+                    lastUserUp = SystemClock.uptimeMillis();
+                    lastUserUpFrac = ev.getY() / v.getHeight();
+                    tapsLeft = 4;
+                }
+                return false;
+            }
+        });
 
         web.addJavascriptInterface(new Bridge(), "XFocusNative");
         web.setWebViewClient(new Client());
@@ -279,6 +301,31 @@ public class MainActivity extends Activity {
         web.reload();
     }
 
+    private void dispatchTap(final float x, final float y) {
+        if (web == null) return;
+        final long down = SystemClock.uptimeMillis();
+        sendTouch(down, down, MotionEvent.ACTION_DOWN, x, y);
+        web.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                sendTouch(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y);
+            }
+        }, 60);
+    }
+
+    private void sendTouch(long down, long at, int action, float x, float y) {
+        if (web == null) return;
+        MotionEvent ev = MotionEvent.obtain(down, at, action, x, y, 0);
+        ev.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        synthesizing = true;
+        try {
+            web.dispatchTouchEvent(ev);
+        } finally {
+            synthesizing = false;
+            ev.recycle();
+        }
+    }
+
     // ---- What the script can ask the app to do ---------------------------
 
     private final class Bridge {
@@ -303,6 +350,21 @@ public class MainActivity extends Activity {
                     setNativeGrey(on);
                 }
             });
+        }
+
+        /** A real tap at (x, y) in WebView pixels, as if the user had touched there. */
+        @JavascriptInterface
+        public boolean tap(final float x, final float y) {
+            if (SystemClock.uptimeMillis() - lastUserUp > 3000 || lastUserUpFrac < 0.75f || tapsLeft <= 0) return false;
+            if (x < 0 || y < 0 || Float.isNaN(x) || Float.isNaN(y)) return false;
+            tapsLeft--;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    dispatchTap(x, y);
+                }
+            });
+            return true;
         }
 
         @JavascriptInterface

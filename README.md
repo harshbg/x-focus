@@ -20,7 +20,7 @@ On the Android phone, download [dist/x-focus.apk](https://github.com/harshbg/x-f
 
 `x-focus.user.js` is the whole product. It runs inside x.com and draws the timer, the check-ins and the settings.
 
-`android/` is a thin Android app: one screen showing x.com in the system web view, which injects that script into every page. It also blocks video downloads and keeps the timer state outside the page.
+`android/` is a thin Android app: one screen showing x.com in the system web view, which injects that script into every page. It also blocks video downloads, keeps the timer state outside the page, and can make one real tap on X's hidden tabs right after you touch the bottom bar (that is how the three buttons switch X's tabs).
 
 The same script works as a userscript in Firefox for Android (Violentmonkey) and should work in Safari on iOS (Userscripts app).
 

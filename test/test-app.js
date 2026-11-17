@@ -13,7 +13,7 @@ const ok = (c, m) => console.log((c ? 'PASS ' : 'FAIL ') + m);
   await page.route('https://example.org/**', r => r.fulfill({ contentType: 'text/html', body: '<p>other</p>' }));
   await page.addInitScript(() => {
     const store = {}; window.__closed = 0; window.__grey = [];
-    window.XFocusNative = { getValue: k => store[k] || '', setValue: (k, v) => { store[k] = v; }, close: () => { window.__closed++; }, setGrey: on => { window.__grey.push(on); }, checkUpdate: () => { window.__checks = (window.__checks || 0) + 1; }, _store: store };
+    window.XFocusNative = { getValue: k => store[k] || '', setValue: (k, v) => { store[k] = v; }, close: () => { window.__closed++; }, setGrey: on => { window.__grey.push(on); }, checkUpdate: () => { window.__checks = (window.__checks || 0) + 1; }, tap: (x, y) => { const el = document.elementFromPoint(x / devicePixelRatio, y / devicePixelRatio); window.__taps = (window.__taps || []).concat([el && el.textContent]); if (el) el.click(); return true; }, _store: store };
   });
   await page.clock.install({ time: new Date() });
   await page.goto('https://x.com/home');
@@ -38,9 +38,22 @@ const ok = (c, m) => console.log((c ? 'PASS ' : 'FAIL ') + m);
   await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent.includes('done')).click());
   await page.clock.runFor(2000);
   ok(await page.evaluate(() => window.__closed) === 1, '"I\'m done" asks the app to close');
-  // manual update check from settings (the unanswered check-in comes back first)
+  // the app's real tap lands on the hidden tab and switches it
   await page.clock.runFor(63000);
-  await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Keep going').click());
+  await page.evaluate(() => { const b = [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Keep going'); if (b) b.click(); });
+  await page.clock.runFor(1500);
+  await page.evaluate(() => document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('.nav button')[2].click());
+  await page.clock.runFor(1500);
+  const nt = await page.evaluate(() => ({ tab: window.__tab, taps: window.__taps, strip: getComputedStyle(document.getElementById('tabsnav')).pointerEvents }));
+  if (!nt.taps) {
+    await page.evaluate(() => document.querySelector('div[data-xfocus]').shadowRoot.querySelector('.main').click());
+    await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent.startsWith('Copy page details')).click());
+    console.log((await page.evaluate(() => document.querySelector('div[data-xfocus]').shadowRoot.querySelector('.dump').value)).split('\n').slice(0, 14).join('\n'));
+  }
+  ok(nt.tab === 'Builders' && nt.taps && nt.taps[0] === 'Builders' && nt.strip === 'none', 'real tap from the app switches to the list, strip untappable again after ' + JSON.stringify(nt));
+  // manual update check from settings
+  await page.clock.runFor(63000);
+  await page.evaluate(() => { const b = [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Keep going'); if (b) b.click(); });
   await page.clock.runFor(1500);
   await page.evaluate(() => document.querySelector('div[data-xfocus]').shadowRoot.querySelector('.main').click());
   await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Check for updates').click());
