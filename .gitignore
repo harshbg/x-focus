@@ -2,7 +2,7 @@
 android/signing.jks
 android/build/
 android/assets/
-*.apk
+/x-focus.apk
 *.idsig
 install.html
 x-focus-source.zip

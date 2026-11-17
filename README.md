@@ -11,6 +11,10 @@ X (x.com) for one phone, made deliberately less fun:
 - a small daily allowance for seeing a post in colour: hold a finger on its picture
 - Grok and Premium upsells are hidden
 
+## Install
+
+On the Android phone, download [dist/x-focus.apk](https://github.com/harshbg/x-focus/raw/main/dist/x-focus.apk) and tap it. Allow the install when Android asks, then sign in to X with username and password.
+
 ## How it is put together
 
 `x-focus.user.js` is the whole product. It runs inside x.com and draws the timer, the check-ins and the settings.
@@ -38,6 +42,8 @@ sudo apt install aapt apksigner zipalign dalvik-exchange android-sdk-platform-23
 ```bash
 android/build.sh
 ```
+
+After a build that changes the app shell, copy the new `x-focus.apk` to `dist/` so the download link stays current.
 
 The build signs with `android/signing.jks`, which is not in this repository. Keep your copy: an APK signed with a different key will not install over the existing app.
 
