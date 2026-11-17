@@ -1,6 +1,13 @@
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 body{margin:0;font:15px system-ui;background:#fff}
-#hdr{position:sticky;top:0;background:#fff;height:53px;z-index:3;border-bottom:1px solid #ccc;display:flex;align-items:center;justify-content:space-around;color:#1d9bf0;font-weight:700}
+#hdr{position:sticky;top:0;background:#fff;z-index:3;border-bottom:1px solid #ccc;display:flex;flex-direction:column;color:#1d9bf0;font-weight:700}
+#logo{height:53px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;position:relative}
+#logo h2{margin:0}
+#tabsnav{height:53px;position:relative}
+[role=tablist]{display:flex;gap:24px;overflow-x:auto;height:53px;align-items:center;padding:0 16px}
+[role=tab]{white-space:nowrap;text-decoration:none;color:inherit}
+.live{display:flex;gap:8px;overflow-x:auto;padding:8px 12px;border-bottom:1px solid #ddd}
+.live>div{flex:none;width:300px;height:40px;border-radius:20px;background:#ccc;display:flex;align-items:center;padding:0 12px}
 article{padding:12px;border-bottom:1px solid #ddd}
 .ph{background:linear-gradient(45deg,#e0245e,#1d9bf0);height:180px;border-radius:12px;margin:8px 0}
 .bb{position:fixed;bottom:0;left:0;right:0;height:50px;background:#eee;border-top:1px solid #ccc;text-align:center;line-height:50px}
@@ -8,8 +15,8 @@ article{padding:12px;border-bottom:1px solid #ddd}
 .modal.on{display:block}
 </style></head><body><div id="react-root">
 <div id="layers"><div class="bb" data-testid="BottomBar"><a data-testid="AppTabBar_Home_Link" href="/home">Home</a> <a data-testid="AppTabBar_Explore_Link" href="/explore">Search</a> <a data-testid="AppTabBar_Notifications_Link" href="/notifications" aria-label="Notifications (3 unread items)">Notif</a> <a data-testid="AppTabBar_DirectMessage_Link" href="/i/chat">Chat</a></div>
-<div class="modal" id="modal"><div id="modaltop" style="display:flex;justify-content:space-between;padding:12px"><button>✕</button><button id="postbtn">Post</button></div><textarea>compose</textarea></div></div>
-<main><div data-testid="primaryColumn"><div id="hdr"><div id="logo"><a data-testid="DashButton_ProfileIcon_Link" href="/u"><img alt="me" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="24" height="24"></a> <h2>X</h2></div><nav id="tabsnav" role="navigation"><div data-testid="ScrollSnap-SwipeableList"><div role="tablist"><div role="presentation"><a role="tab" href="/home" aria-selected="true">For you</a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false">Following</a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false">Builders</a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false">News</a></div></div><button aria-label="Next"><svg width="10" height="10"></svg></button></div></nav></div><section id="tl"></section></div></main></div>
+<div id="fab" data-testid="FloatingActionButtons_Tweet_Button" style="position:fixed;right:16px;bottom:16px;width:56px;height:56px;border-radius:50%;background:#1d9bf0"></div><div class="modal" id="modal"><div id="modaltop" style="display:flex;justify-content:space-between;padding:12px"><button>✕</button><button id="postbtn">Post</button></div><textarea>compose</textarea></div></div>
+<main><div data-testid="primaryColumn"><div id="hdr" style="height: 106px;"><div id="logo"><a data-testid="DashButton_ProfileIcon_Link" href="/u"><img alt="me" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="24" height="24"></a> <h2>X</h2></div><nav id="tabsnav" role="navigation"><div data-testid="ScrollSnap-SwipeableList"><div role="tablist"><div role="presentation"><a role="tab" href="/home" aria-selected="true"><div class="press"><span>For you</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>Following</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>Builders</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>News</span></div></a></div></div><button aria-label="Next"><svg width="10" height="10"></svg></button></div></nav></div><section id="tl"></section></div></main></div>
 <script>
 var tl=document.getElementById('tl');
 for(var i=0;i<30;i++){
@@ -23,13 +30,17 @@ document.getElementById('c4').insertAdjacentHTML('afterend','<div data-testid="c
 document.getElementById('c7').insertAdjacentHTML('afterend','<div data-testid="cellInnerDiv" id="ad2"><article><div data-testid="User-Name"><a href="/c">Other brand</a></div><div><span>Ad</span></div><div data-testid="tweetText">Another promo. Ad</div><div role="group"><button>Like</button></div></article></div>');
 document.getElementById('c8').querySelector('[data-testid=tweetText]').insertAdjacentHTML('beforeend',' <span>Ad</span>');
 
+// Like X: the press handler sits on an element inside the tab, and only real
+// clicks on a tab that is laid out count.
 document.querySelectorAll('[role=tab]').forEach(function (t) {
-  t.addEventListener('click', function (e) {
+  t.querySelector('.press').addEventListener('click', function (e) {
     e.preventDefault();
+    if (!t.getClientRects().length) return;
     document.querySelectorAll('[role=tab]').forEach(function (x) { x.setAttribute('aria-selected', x === t ? 'true' : 'false'); });
     window.__tab = t.textContent;
   });
 });
 document.getElementById('c5').querySelector('[data-testid=tweetText]').insertAdjacentHTML('afterend','<div data-testid="card.wrapper"><a href="/i/spaces/1abc">LIVE Space: big talk</a><span>420 listening</span></div>');
+document.getElementById('c0').insertAdjacentHTML('beforebegin','<div data-testid="cellInnerDiv" id="livebar"><div class="live"><div role="button">+2.6K · NVIDIA EARNINGS LIVE</div><div role="button">+1.7K · Another live one</div></div></div>');
 document.getElementById('c0').insertAdjacentHTML('beforebegin','<div data-testid="cellInnerDiv" id="spacebar"><div><a href="/i/spaces/2def">Live now</a> <a href="/i/spaces/3ghi">Another space</a></div></div>');
 </script></body></html>

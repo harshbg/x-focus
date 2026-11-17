@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.3.0
+// @version      2.4.0
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.3.0';
+  var VERSION = '2.4.0';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -83,7 +83,9 @@
     'body{box-sizing:border-box!important;padding-top:var(--xf-h,0px)!important;padding-bottom:var(--xf-nb,0px)!important}',
     // Three-button bar: X's own bottom bar and the scrolling Home tab strip go.
     'html[data-xf-nav] [data-testid="BottomBar"]{display:none!important}',
-    'html[data-xf-nav][data-xf-onhome] [data-xf-tabs]{display:none!important}',
+    // Out of the way but still laid out, so X keeps handling its tabs.
+    'html[data-xf-nav][data-xf-onhome]:not([data-xf-tabsshow]) [data-xf-tabs]{position:absolute!important;top:0!important;' +
+      'left:0!important;right:0!important;opacity:0!important;pointer-events:none!important;z-index:-1!important}',
     'video,' + PLAYER_SEL + '{display:none!important}',
     '[data-xf-video]{' + STUB_BOX + ';position:relative!important;margin:4px 0!important}',
     '[data-xf-video]>*{display:none!important}',
@@ -168,6 +170,8 @@
     '.nav svg{display:block;width:24px;height:24px}',
     '.nav span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.go{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:100%}',
+    '.dump{width:100%;height:180px;background:#111;color:#ddd;border:1px solid #444;border-radius:8px;padding:8px;' +
+      'font:11px/1.4 ui-monospace,monospace;white-space:pre;overflow:auto}',
     '.go .btn{max-width:none;padding:14px 4px;font-size:13px;line-height:1.2;background:transparent;color:#fff;border-color:#5a5a5a}',
     '.week{display:flex;align-items:flex-end;gap:6px;width:100%}',
     '.day{flex:1 1 0;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;line-height:1;color:#9a9a9a;font-variant-numeric:tabular-nums}',
@@ -503,15 +507,59 @@
     cur.setAttribute('data-xf-tabs', '');
   }
 
-  function clickTab(i) {
+  var tabsShown = false, lastTabTry = '';
+
+  // A tap as X's buttons expect it: pointer and mouse down/up, then click,
+  // on the innermost element, so a handler on any wrapper inside the tab fires.
+  function pressTab(tab) {
+    var spans = tab.querySelectorAll('span');
+    var target = spans.length ? spans[spans.length - 1] : tab;
+    var r = target.getBoundingClientRect();
+    var base = { bubbles: true, cancelable: true, composed: true, view: window,
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 };
+    function fire(Ctor, type, extra) {
+      var o = {}, k;
+      for (k in base) o[k] = base[k];
+      for (k in extra || {}) o[k] = extra[k];
+      try { target.dispatchEvent(new Ctor(type, o)); } catch (e) {}
+    }
+    var P = window.PointerEvent || window.MouseEvent;
+    var ptr = { pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    fire(P, 'pointerdown', ptr);
+    fire(window.MouseEvent, 'mousedown');
+    ptr.buttons = 0;
+    fire(P, 'pointerup', ptr);
+    fire(window.MouseEvent, 'mouseup', { buttons: 0 });
+    fire(window.MouseEvent, 'click', { buttons: 0 });
+  }
+
+  function tabSelected(i) {
+    var t = homeTabs()[i];
+    return !!t && t.getAttribute('aria-selected') === 'true';
+  }
+
+  function clickTab(i, attempt) {
     var tabs = homeTabs();
     if (!tabs.length) return false;
     if (i >= tabs.length) {
       note(i === 2 ? 'Pin a list in X to use this button' : 'That tab is missing');
       return true;
     }
-    tabs[i].click();
+    attempt = attempt || 1;
+    if (attempt === 2) { tabsShown = true; flag('data-xf-tabsshow', true); }
+    pressTab(tabs[i]);
     try { window.scrollTo(0, 0); } catch (e) {}
+    setTimeout(function () {
+      var ok = tabSelected(i);
+      lastTabTry = 'tab ' + i + ', try ' + attempt + ': ' + (ok ? 'switched' : 'no change');
+      if (attempt === 2) {
+        setTimeout(function () { tabsShown = false; flag('data-xf-tabsshow', false); }, 400);
+        if (!ok) note('Could not switch tabs. Settings \u2192 Copy page details');
+      } else if (!ok) {
+        clickTab(i, 2);
+      }
+      if (bar && loaded) render();
+    }, 600);
     return true;
   }
 
@@ -543,6 +591,124 @@
     pendingTab = null;
     try { window.sessionStorage.removeItem(PENDING_TAB); } catch (e) {}
     if (bar && loaded) render();
+  }
+
+  function isHScroller(el) {
+    if (el.scrollWidth <= el.clientWidth + 20) return false;
+    var ox = window.getComputedStyle(el).overflowX;
+    return ox === 'auto' || ox === 'scroll';
+  }
+
+  var NOT_CAROUSEL = 'article, [data-testid="cellInnerDiv"], [role="tab"]';
+
+  // The live Spaces bar, and any other sideways-scrolling strip in the feed that is
+  // not a post: the cell that holds it is hidden.
+  function scanCarousels() {
+    if (!state.clean) return;
+    var col = document.querySelector('[data-testid="primaryColumn"]') || document.body;
+    var cells = col.querySelectorAll('[data-testid="cellInnerDiv"]:not([data-xf-spacecell])');
+    for (var i = 0; i < cells.length; i++) {
+      var cell = cells[i], len = (cell.textContent || '').length;
+      if (cell.__xfLen === len) continue;
+      cell.__xfLen = len;
+      if (cell.querySelector('article')) continue;
+      var divs = cell.querySelectorAll('div');
+      for (var j = 0; j < divs.length && j < 400; j++) {
+        if (isHScroller(divs[j]) && !divs[j].querySelector('[role="tab"]')) {
+          cell.setAttribute('data-xf-spacecell', '');
+          break;
+        }
+      }
+    }
+    // A strip that sits above the feed rather than in it.
+    if (window.scrollY > 4 || !document.elementsFromPoint) return;
+    var w = window.innerWidth, seen = new Set();
+    for (var y = barH + 40; y < barH + 300; y += 25) {
+      for (var x = w * 0.3; x <= w * 0.7; x += w * 0.4) {
+        var els;
+        try { els = document.elementsFromPoint(x, y); } catch (e) { els = []; }
+        for (var k = 0; k < els.length && k < 6; k++) {
+          for (var el = els[k]; el && el !== document.body && el !== col; el = el.parentElement) {
+            if (seen.has(el)) break;
+            seen.add(el);
+            if (el === host || el.closest('article, [data-xf-tabs], [data-xf-spacecell]')) break;
+            if (!isHScroller(el) || el.querySelector(NOT_CAROUSEL)) continue;
+            var cur = el, base = el.querySelectorAll(STRIP_SEL).length;
+            for (var n = 0; n < 6; n++) {
+              var p = cur.parentElement;
+              if (!p || p === col || p === document.body || p.querySelector(NOT_CAROUSEL)) break;
+              var pos = window.getComputedStyle(p).position;
+              if (pos === 'fixed' || pos === 'sticky' || p.querySelectorAll(STRIP_SEL).length !== base) break;
+              cur = p;
+            }
+            cur.setAttribute('data-xf-spacecell', '');
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Space reserved for the hidden tab strip: a container that kept its height,
+  // an empty spacer above the feed, or padding on the feed.
+  var gapFixes = [];
+  function setFix(el, prop, value) {
+    var known = gapFixes.some(function (f) { return f.el === el && f.prop === prop; });
+    if (!known) gapFixes.push({ el: el, prop: prop, orig: el.style.getPropertyValue(prop), prio: el.style.getPropertyPriority(prop) });
+    el.style.setProperty(prop, value, 'important');
+  }
+  function restoreGap() {
+    gapFixes.forEach(function (f) {
+      if (f.orig) f.el.style.setProperty(f.prop, f.orig, f.prio);
+      else f.el.style.removeProperty(f.prop);
+    });
+    gapFixes = [];
+  }
+  function hasContent(el) {
+    return !!((el.textContent || '').trim() || el.querySelector('img, svg, video, canvas, a, button, [role="button"]'));
+  }
+
+  function fixGap() {
+    var strip = document.querySelector('[data-xf-tabs]');
+    var active = strip && state.nav && loggedIn && window.location.pathname === '/home' && !tabsShown;
+    if (!active) { if (gapFixes.length) restoreGap(); return; }
+    if (window.scrollY > 4) return;
+    var head = null, e, n;
+    for (e = strip.parentElement, n = 0; e && e !== document.body && n < 8; e = e.parentElement, n++) {
+      if (e.style.height) setFix(e, 'height', 'auto');
+      var pos = window.getComputedStyle(e).position;
+      if (pos === 'fixed' || pos === 'sticky') { head = e; break; }
+    }
+    head = head || strip.parentElement;
+    var col = strip.closest('[data-testid="primaryColumn"]') || document;
+    var cells = col.querySelectorAll('[data-testid="cellInnerDiv"]'), first = null, firstTop = 0;
+    for (var i = 0; i < cells.length; i++) {
+      var r = cells[i].getBoundingClientRect();
+      if (r.height > 0) { first = cells[i]; firstTop = r.top; break; }
+    }
+    if (!first) return;
+    var bottom = 0;
+    var parts = head.querySelectorAll('img, svg, a, button, [role="button"], h1, h2, h3');
+    for (i = 0; i < parts.length; i++) {
+      if (parts[i].closest('[data-xf-tabs]')) continue;
+      var pr = parts[i].getBoundingClientRect();
+      if (pr.height > 0 && pr.bottom > bottom) bottom = pr.bottom;
+    }
+    if (!bottom) bottom = head.getBoundingClientRect().bottom;
+    var gap = Math.round(firstTop - bottom - 14);
+    if (gap < 10 || gap > 300) return;
+    for (var a = first; a && a.parentElement && a !== document.body; a = a.parentElement) {
+      for (var sib = a.previousElementSibling; sib; sib = sib.previousElementSibling) {
+        var sr = sib.getBoundingClientRect();
+        if (sr.height >= gap && sr.bottom <= firstTop + 1 && !hasContent(sib)) {
+          setFix(sib, 'height', Math.round(sr.height - gap) + 'px');
+          setFix(sib, 'min-height', '0px');
+          return;
+        }
+      }
+      var pt = parseFloat(window.getComputedStyle(a.parentElement).paddingTop) || 0;
+      if (pt >= gap) { setFix(a.parentElement, 'padding-top', Math.round(pt - gap) + 'px'); return; }
+    }
   }
 
   // Spaces: a Space card in a post becomes a stub; anything else about Spaces goes.
@@ -726,7 +892,40 @@
     }
   }
 
+  // Floating buttons that sat on X's bottom bar (compose) move up above ours.
+  function fixBottom(el) {
+    if (el.hasAttribute('data-xf-bot')) {
+      if (el.style.getPropertyValue('bottom').indexOf('--xf-nb') < 0) {
+        el.style.setProperty('bottom', 'calc(' + el.getAttribute('data-xf-bot') + 'px + var(--xf-nb, 0px))', 'important');
+      }
+      return;
+    }
+    var cs = window.getComputedStyle(el);
+    if (cs.position !== 'fixed') return;
+    var b = parseFloat(cs.bottom), r = el.getBoundingClientRect();
+    if (isNaN(b) || b >= navH || r.width > window.innerWidth * 0.5 || r.height < 1) return;
+    el.setAttribute('data-xf-bot', String(b));
+    el.style.setProperty('bottom', 'calc(' + b + 'px + var(--xf-nb, 0px))', 'important');
+  }
+
+  function adjustBottom() {
+    if (navH <= 0 || !document.elementsFromPoint) return;
+    var w = window.innerWidth, y = window.innerHeight - navH / 2, seen = new Set();
+    for (var x = w * 0.1; x <= w * 0.95; x += w * 0.2) {
+      var els;
+      try { els = document.elementsFromPoint(x, y); } catch (e) { els = []; }
+      for (var k = 0; k < els.length && k < 8; k++) {
+        for (var el = els[k]; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+          if (seen.has(el)) break;
+          seen.add(el);
+          if (el !== host) fixBottom(el);
+        }
+      }
+    }
+  }
+
   function adjustLayout() {
+    try { adjustBottom(); } catch (e) {}
     if (!barH || !document.elementsFromPoint || !host || host.style.display === 'none') return;
     var w = window.innerWidth;
     var xs = [w * 0.1, w * 0.5, w * 0.9];
@@ -1134,6 +1333,102 @@
     return { box: box, row: h('label', { class: 'check', for: id }, [box, h('span', { text: label })]) };
   }
 
+  // One line per element: what it is, where it is, and anything layout-related.
+  function describe(el) {
+    var cs = window.getComputedStyle(el), r = el.getBoundingClientRect(), out = [el.tagName.toLowerCase()];
+    function add(k, v) { if (v) out.push(k + '=' + String(v).replace(/\s+/g, ' ').slice(0, 40)); }
+    add('t', el.getAttribute('data-testid'));
+    add('role', el.getAttribute('role'));
+    add('aria', el.getAttribute('aria-label'));
+    add('sel', el.getAttribute('aria-selected'));
+    add('href', el.getAttribute('href'));
+    if (cs.position !== 'static' && cs.position !== 'relative') add('pos', cs.position + ' t' + cs.top + ' b' + cs.bottom);
+    out.push('y' + Math.round(r.top) + ' h' + Math.round(r.height) + ' w' + Math.round(r.width));
+    add('sh', el.style.height);
+    add('tf', el.style.transform);
+    if (cs.paddingTop !== '0px') add('pt', cs.paddingTop);
+    if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') add('ox', cs.overflowX + ' sw' + el.scrollWidth);
+    for (var i = 0; i < el.attributes.length; i++) {
+      var a = el.attributes[i].name;
+      if (a.indexOf('data-xf-') === 0) add('xf', a.slice(8));
+    }
+    if (!el.childElementCount) add('txt', (el.textContent || '').trim());
+    return out.join(' ');
+  }
+
+  function pageReport() {
+    var L = [], n, e, i;
+    L.push('X Focus ' + VERSION + ' path=' + window.location.pathname + ' scrollY=' + Math.round(window.scrollY) +
+      ' view=' + window.innerWidth + 'x' + window.innerHeight + ' bar=' + barH + ' nav=' + navH +
+      ' app=' + !!NATIVE + ' gapFixes=' + gapFixes.length);
+    L.push('last tab press: ' + (lastTabTry || 'none'));
+    var list = homeTablist();
+    L.push('== tab strip and its parents');
+    for (e = list, n = 0; e && e !== document.documentElement && n < 16; e = e.parentElement, n++) L.push(describe(e));
+    L.push('== inside the first two tabs');
+    var tabs = homeTabs();
+    for (i = 0; i < tabs.length && i < 2; i++) {
+      (function walk(el, d) {
+        if (L.length > 400) return;
+        L.push(new Array(d + 1).join(' ') + describe(el));
+        for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c, d + 1);
+      })(tabs[i], 0);
+    }
+    L.push('== top of the page');
+    var col = document.querySelector('[data-testid="primaryColumn"]') || document.body, count = 0;
+    (function walk(el, d) {
+      if (count > 260) return;
+      var r = el.getBoundingClientRect();
+      if (el !== col && (r.top > 520 || (r.bottom < -40 && r.height > 0))) return;
+      count++;
+      L.push(new Array(d + 1).join(' ') + describe(el));
+      if (el.tagName === 'ARTICLE' || el.tagName === 'svg') return;
+      for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c, d + 1);
+    })(col, 0);
+    L.push('== fixed things near the bottom');
+    if (document.elementsFromPoint) {
+      var seen = new Set();
+      [0.15, 0.5, 0.85].forEach(function (fx) {
+        [40, 100, 160].forEach(function (dy) {
+          document.elementsFromPoint(window.innerWidth * fx, window.innerHeight - dy).forEach(function (el) {
+            for (; el && el !== document.body; el = el.parentElement) {
+              if (seen.has(el)) return;
+              seen.add(el);
+              if (window.getComputedStyle(el).position === 'fixed') L.push(describe(el));
+            }
+          });
+        });
+      });
+    }
+    return L.join('\n');
+  }
+
+  function reportButton() {
+    var b = h('button', { class: 'btn ghost', type: 'button', text: 'Copy page details for Claude' });
+    b.addEventListener('click', function () {
+      var text = pageReport();
+      var box = h('textarea', { class: 'dump', readonly: '', 'aria-label': 'Page details' });
+      box.value = text;
+      b.parentNode.insertBefore(box, b.nextSibling);
+      function done(ok) {
+        b.textContent = ok ? 'Copied. Paste it into the chat' : 'Select the text below and copy it';
+      }
+      function fallback() {
+        var ok = false;
+        try { box.focus(); box.select(); ok = document.execCommand('copy'); } catch (e) {}
+        done(ok);
+      }
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+          return;
+        }
+      } catch (e) {}
+      fallback();
+    });
+    return b;
+  }
+
   // In the app: fetch the newest script now instead of waiting for the daily check.
   // If there is one, the app reloads X with it; otherwise this button reports back.
   function updateButton() {
@@ -1223,6 +1518,7 @@
       .concat([
         h('p', { class: 'note', text: 'Used today: ' + Math.floor(state.usedSec / 60) + ' min' +
           (state.extCount ? ' · extra time taken ' + state.extCount + '×' : '') + ' · v' + VERSION }),
+        reportButton(),
         updateButton(),
         h('button', {
           class: 'btn', type: 'button', text: 'Done',
@@ -1397,7 +1693,7 @@
     if (rollover() && (mode === 'lock' || mode === 'checkpoint')) show(null);
     applyFlags();
 
-    if (state.clean && /^\/i\/spaces(\/|$)/.test(window.location.pathname)) {
+    if (state.clean && /^\/i\/(spaces|broadcasts)(\/|$)/.test(window.location.pathname)) {
       window.location.replace('/home');
       return;
     }
@@ -1465,6 +1761,8 @@
       try { scanAds(); } catch (e1) {}
       try { scanSpaces(); } catch (e3) {}
       try { scanTabs(); } catch (e4) {}
+      try { scanCarousels(); } catch (e7) {}
+      try { fixGap(); } catch (e8) {}
       try { applyFlags(); tryPendingTab(); } catch (e5) {}
       try { if (bar && loaded) renderNav(); } catch (e6) {}
       try { adjustLayout(); } catch (e2) {}
