@@ -52,7 +52,20 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   ok(vid.n === 10 && vid.cls === 'mwrap' && vid.h < 50 && vid.textVisible && vid.photoVisible === 180, 'videos collapsed to stub, text+photos kept');
   const ads = await page.evaluate(() => { const a = id => { const art = document.querySelector('#' + id + ' article'); return { marked: art.hasAttribute('data-xf-ad'), h: art.getBoundingClientRect().height, label: getComputedStyle(art, '::before').content, shown: [...art.children].filter(c => c.getBoundingClientRect().height > 0).length }; }; return { ad1: a('ad1'), ad2: a('ad2'), c8: a('c8') }; });
   ok(ads.ad1.marked && ads.ad2.marked && ads.ad1.h < 50 && ads.ad2.h < 50 && ads.ad1.shown === 0 && ads.ad2.shown === 0 && /Ad hidden/.test(ads.ad1.label) && !ads.c8.marked && ads.c8.shown > 0, 'ads become an empty dotted "Ad hidden" box; a post that only mentions Ad is kept ' + JSON.stringify(ads));
-  ok(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid=BottomBar]')).display) !== 'none', 'bottom bar stays');
+  const navInfo = await page.evaluate(`({ xbar: getComputedStyle(document.querySelector('[data-testid=BottomBar]')).display, nav: !${R}.querySelector('.nav').hidden, labels: [...${R}.querySelectorAll('.nav button span')].map(x => x.textContent), on: [...${R}.querySelectorAll('.nav button')].findIndex(b => b.classList.contains('on')), navTop: ${R}.querySelector('.nav').getBoundingClientRect().top, ih: innerHeight, pb: getComputedStyle(document.body).paddingBottom })`);
+  ok(navInfo.xbar === 'none' && navInfo.nav && JSON.stringify(navInfo.labels) === '["Home","Following","Builders"]' && navInfo.on === 0 && navInfo.ih - navInfo.navTop >= 50 && parseFloat(navInfo.pb) >= 50, "X's bottom bar replaced by Home, Following and the first list " + JSON.stringify(navInfo));
+  const strip = await page.evaluate(() => ({ marked: document.querySelector('[data-xf-tabs]') && document.querySelector('[data-xf-tabs]').id, h: document.getElementById('tabsnav').getBoundingClientRect().height, logo: document.getElementById('logo').getBoundingClientRect().height }));
+  ok(strip.marked === 'tabsnav' && strip.h === 0 && strip.logo > 0, 'scrolling tab strip at the top hidden, rest of the header kept ' + JSON.stringify(strip));
+  await page.evaluate(`[...${R}.querySelectorAll('.nav button')][2].click()`); await page.clock.runFor(300);
+  ok(await page.evaluate(() => window.__tab) === 'Builders' && await page.evaluate(`[...${R}.querySelectorAll('.nav button')][2].classList.contains('on')`), 'list button opens the first list');
+  await page.evaluate(`[...${R}.querySelectorAll('.nav button')][1].click()`); await page.clock.runFor(300);
+  ok(await page.evaluate(() => window.__tab) === 'Following', 'Following button opens Following');
+  await page.evaluate(`[...${R}.querySelectorAll('.nav button')][0].click()`); await page.clock.runFor(300);
+  ok(await page.evaluate(() => window.__tab) === 'For you', 'Home button opens For you');
+  const sp = await page.evaluate(() => ({ card: getComputedStyle(document.querySelector('#c5 [data-testid="card.wrapper"]'), '::before').content, cardKids: [...document.querySelector('#c5 [data-testid="card.wrapper"]').children].filter(c => c.getBoundingClientRect().height > 0).length, text: document.querySelector('#c5 [data-testid=tweetText]').getBoundingClientRect().height > 0, bar: document.getElementById('spacebar').getBoundingClientRect().height }));
+  ok(/Space hidden/.test(sp.card) && sp.cardKids === 0 && sp.text && sp.bar === 0, 'Spaces: card becomes a stub, live-Spaces strip removed ' + JSON.stringify(sp));
+  const aud = await page.evaluate(async () => { const a = document.createElement('audio'); try { await a.play(); return 'played'; } catch (e) { return e.name; } });
+  ok(aud === 'NotAllowedError', 'audio (Spaces) cannot play');
   const play = await page.evaluate(async () => { const v = document.querySelector('video'); try { await v.play(); return 'played'; } catch (e) { return e.name; } });
   ok(play === 'NotAllowedError', 'video.play() blocked');
   await page.evaluate(() => window.scrollTo(0, 0)); await page.clock.runFor(500);
@@ -76,6 +89,7 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   // settings
   await page.evaluate(`${R}.querySelector('.main').click()`);
   ok(/DAILY LIMIT/i.test(await ovText(page) || ''), 'settings opens on bar tap');
+  ok(/Search\s+Notifications \(3\)\s+Chat/.test(await ovText(page) || ''), 'settings starts with Search, Notifications (with unread count) and Chat');
   await slide(page, 40);
   await clickBtn(page, '10 min');
   await page.evaluate(`${R}.querySelector('#xf-hideposts').click()`);
@@ -84,6 +98,27 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   ok(s.limitMin === 30 && s.pendingLimitMin === 40 && s.pendingFrom > today() && s.hidePosts === true && s.colorMin === 10 && s.hideAds === true && s.clean === true, 'raise deferred to tomorrow; colour 10 min and toggles saved');
   ok(await page.evaluate(() => document.getElementById('c0').getBoundingClientRect().height === 0 && document.getElementById('c1').getBoundingClientRect().height > 0), 'video posts hidden entirely when option on');
   ok(await page.evaluate(() => /night_mode=2/.test(document.cookie)), 'black theme cookie set');
+  await ctx.close();
+
+  // settings shortcuts open X's pages; a button pressed away from Home loads Home, then the tab
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 100, weekSeen: today(), ts: Date.now() }));
+  await page.evaluate(`${R}.querySelector('.main').click()`);
+  await Promise.all([page.waitForURL('**/i/chat'), clickBtn(page, 'Chat')]);
+  await page.clock.runFor(5000);
+  ok(await page.evaluate(() => location.pathname) === '/i/chat' && (await ovText(page)) === null, 'Chat in settings opens chat');
+  ok(await page.evaluate(`[...${R}.querySelectorAll('.nav button')].every(b => !b.classList.contains('on'))`), 'no button lit away from Home');
+  await Promise.all([page.waitForURL('**/home'), page.evaluate(`[...${R}.querySelectorAll('.nav button')][1].click()`)]);
+  await page.clock.runFor(2500);
+  ok(await page.evaluate(() => location.pathname + ' ' + document.querySelector('[role=tab][aria-selected=true]').textContent) === '/home Following', 'Following from another page loads Home and selects Following');
+  await page.clock.runFor(2000); // the mock reloads the page, so the opening screen shows first
+  await page.evaluate(`${R}.querySelector('.main').click()`);
+  await page.evaluate(`${R}.querySelector('#xf-nav').click()`);
+  await clickBtn(page, 'Done'); await page.clock.runFor(1200);
+  ok(await page.evaluate(`(() => getComputedStyle(document.querySelector('[data-testid=BottomBar]')).display !== 'none' && ${R}.querySelector('.nav').hidden && document.getElementById('tabsnav').getBoundingClientRect().height > 0)()`), "switching the three buttons off brings back X's bar and tabs");
+  await ctx.close();
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 100, weekSeen: today(), ts: Date.now() }, '/i/spaces/1abc'));
+  await page.clock.runFor(3000);
+  ok(await page.evaluate(() => location.pathname) === '/home', 'opening a Space link goes back to Home');
   await ctx.close();
 
   // 2. check-in: one minute, clock paused

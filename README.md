@@ -9,7 +9,8 @@ X (x.com) for one phone, made deliberately less fun:
 - a full-screen check-in every 5 minutes that holds for one minute
 - a weekly summary of minutes used and extra time taken
 - a small daily allowance for seeing a post in colour: hold a finger on its picture
-- Grok and Premium upsells are hidden
+- three buttons at the bottom (Home, Following, the first pinned list) replace X's bar and the scrolling tab strip; Search, Notifications and Chat are in the settings screen
+- no Spaces, Grok or Premium upsells
 
 ## Install
 

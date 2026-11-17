@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.2.0
+// @version      2.3.0
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.2.0';
+  var VERSION = '2.3.0';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -52,6 +52,15 @@
   var CONTENT_SEL = 'img, a, button, video, time, [role="button"], [role="link"], [data-testid="tweetText"], [data-testid="User-Name"]';
   // Long-pressing one of these inside a post shows the post in colour.
   var PICTURE_SEL = 'img, svg, canvas, [data-testid="tweetPhoto"], [data-testid="card.wrapper"], [style*="background-image"]';
+  // X's own pages that move from the bottom bar into the settings screen.
+  var GO_TO = [
+    { label: 'Search', testid: 'AppTabBar_Explore_Link', path: '/explore' },
+    { label: 'Notifications', testid: 'AppTabBar_Notifications_Link', path: '/notifications' },
+    { label: 'Chat', testid: 'AppTabBar_DirectMessage_Link', path: '/messages' }
+  ];
+  var PENDING_TAB = 'xfocus.tab';  // sessionStorage: Home tab to select once /home has loaded
+  // Counted when deciding how much of the header belongs to the Home tab strip.
+  var STRIP_SEL = 'a, img, h1, h2, input, [role="link"]';
 
   // Greyscale is a full-screen layer under the timer, so the timer keeps its
   // colours and a hole can be cut in the layer to show one post in colour.
@@ -71,7 +80,10 @@
   var ADS = 'html[data-xf-hideads] article[data-xf-ad]';
   var PAGE_CSS = [
     'html[data-xf-rootgrey]{filter:grayscale(1)!important;-webkit-filter:grayscale(1)!important}',
-    'body{box-sizing:border-box!important;padding-top:var(--xf-h,0px)!important}',
+    'body{box-sizing:border-box!important;padding-top:var(--xf-h,0px)!important;padding-bottom:var(--xf-nb,0px)!important}',
+    // Three-button bar: X's own bottom bar and the scrolling Home tab strip go.
+    'html[data-xf-nav] [data-testid="BottomBar"]{display:none!important}',
+    'html[data-xf-nav][data-xf-onhome] [data-xf-tabs]{display:none!important}',
     'video,' + PLAYER_SEL + '{display:none!important}',
     '[data-xf-video]{' + STUB_BOX + ';position:relative!important;margin:4px 0!important}',
     '[data-xf-video]>*{display:none!important}',
@@ -82,7 +94,12 @@
     ADS + '>*{display:none!important}',
     ADS + '::before{content:"Ad hidden";' + STUB_LABEL + '}',
     'a[href="/i/video"],a[href^="/i/video/"]{display:none!important}',
-    // Clean mode: no Grok, no Premium upsells.
+    // Clean mode: no Spaces, no Grok, no Premium upsells.
+    CLEAN + '[data-xf-space]{' + STUB_BOX + ';position:relative!important;margin:4px 0!important}',
+    CLEAN + '[data-xf-space]>*{display:none!important}',
+    CLEAN + '[data-xf-space]::before{content:"Space hidden";' + STUB_LABEL + '}',
+    CLEAN + '[data-xf-spacecell],' + CLEAN + '[data-testid^="SpaceDock"],' + CLEAN + 'a[href="/i/spaces"],' +
+      CLEAN + 'a[href="/i/spaces/start"]{display:none!important}',
     CLEAN + '[data-testid="GrokDrawer"],' + CLEAN + 'a[href="/i/grok"],' +
       CLEAN + 'a[href^="/i/premium"],' + CLEAN + 'a[href="/i/verified-choose"],' +
       CLEAN + '[data-testid="super-upsell-UpsellCardRenderProperties"]{display:none!important}'
@@ -142,6 +159,16 @@
     '.checks{display:flex;flex-direction:column;gap:14px;width:100%;margin-top:8px}',
     '.check{display:flex;align-items:center;gap:12px;font-size:16px;line-height:1.3;text-align:left;cursor:pointer}',
     '.check input{width:24px;height:24px;flex:none;accent-color:#fff;margin:0}',
+    '.nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:#000;border-top:1px solid #2a2a2a;' +
+      'padding:0 env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);font-family:' + FONT + '}',
+    '.nav button{flex:1 1 0;min-width:0;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'gap:4px;padding:0 6px;margin:0;background:none;border:0;color:#7d7d7d;font:600 11px/1 ' + FONT + ';cursor:pointer;' +
+      '-webkit-tap-highlight-color:transparent}',
+    '.nav button.on{color:#fff}',
+    '.nav svg{display:block;width:24px;height:24px}',
+    '.nav span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.go{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:100%}',
+    '.go .btn{max-width:none;padding:14px 4px;font-size:13px;line-height:1.2;background:transparent;color:#fff;border-color:#5a5a5a}',
     '.week{display:flex;align-items:flex-end;gap:6px;width:100%}',
     '.day{flex:1 1 0;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;line-height:1;color:#9a9a9a;font-variant-numeric:tabular-nums}',
     '.day i{display:block;width:100%;background:#fff;border-radius:2px}',
@@ -162,6 +189,8 @@
     hideAds: true,
     clean: true,          // hide Grok and Premium upsells
     blackBg: true,        // ask X for its pure-black theme
+    nav: true,            // three buttons (Home, Following, first list) instead of X's bottom bar
+    listName: '',         // name of the first pinned list, for its button
     weekSeen: '',         // day the weekly summary was last shown
     day: '',
     usedSec: 0,
@@ -421,6 +450,114 @@
     flag('data-xf-hideposts', state.hidePosts);
     flag('data-xf-hideads', state.hideAds);
     flag('data-xf-clean', state.clean && checkLoggedIn());
+    flag('data-xf-nav', state.nav && loggedIn);
+    flag('data-xf-onhome', window.location.pathname === '/home');
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Home tabs: For you, Following and the first pinned list             */
+  /* ------------------------------------------------------------------ */
+
+  var pendingTab = null;
+
+  function homeTablist() {
+    if (window.location.pathname !== '/home') return null;
+    return document.querySelector('[data-testid="primaryColumn"] [role="tablist"]') ||
+      document.querySelector('main [role="tablist"]') || document.querySelector('[role="tablist"]');
+  }
+
+  function homeTabs() {
+    var list = homeTablist();
+    return list ? list.querySelectorAll('[role="tab"]') : [];
+  }
+
+  // Which of the three buttons matches the current view, or -1.
+  function activeTab() {
+    if (window.location.pathname !== '/home') return -1;
+    var tabs = homeTabs();
+    for (var i = 0; i < tabs.length && i < 3; i++) if (tabs[i].getAttribute('aria-selected') === 'true') return i;
+    return tabs.length ? -1 : 0;
+  }
+
+  // Marks the strip of Home tabs (and the wrappers that hold only it) so it
+  // can be hidden; also learns the first list's name for its button.
+  function scanTabs() {
+    var list = homeTablist();
+    if (!list) return;
+    var tabs = list.querySelectorAll('[role="tab"]');
+    if (tabs[2]) {
+      var name = (tabs[2].textContent || '').trim();
+      if (name && name.length <= 40 && name !== state.listName) { state.listName = name; save(); }
+    }
+    if (list.closest('[data-xf-tabs]')) return;
+    var base = list.querySelectorAll(STRIP_SEL).length, cur = list;
+    for (var n = 0; n < 6; n++) {
+      var p = cur.parentElement;
+      if (!p || p === document.body || p.tagName === 'MAIN' || p.tagName === 'HEADER') break;
+      if (p.getAttribute('data-testid') === 'primaryColumn') break;
+      var pos = window.getComputedStyle(p).position;
+      if (pos === 'sticky' || pos === 'fixed') break;
+      if (p.querySelectorAll(STRIP_SEL).length !== base) break;
+      cur = p;
+    }
+    cur.setAttribute('data-xf-tabs', '');
+  }
+
+  function clickTab(i) {
+    var tabs = homeTabs();
+    if (!tabs.length) return false;
+    if (i >= tabs.length) {
+      note(i === 2 ? 'Pin a list in X to use this button' : 'That tab is missing');
+      return true;
+    }
+    tabs[i].click();
+    try { window.scrollTo(0, 0); } catch (e) {}
+    return true;
+  }
+
+  function openTab(i) {
+    if (mode) return;
+    endPeek();
+    if (window.location.pathname === '/home' && clickTab(i)) { render(); return; }
+    pendingTab = { i: i, until: Date.now() + 8000 };
+    try { window.sessionStorage.setItem(PENDING_TAB, String(i)); } catch (e) {}
+    if (window.location.pathname !== '/home') {
+      var home = document.querySelector('[data-testid="AppTabBar_Home_Link"]');
+      if (home) home.click();
+      else window.location.assign('/home');
+    }
+  }
+
+  // Finishes a button press that had to load Home first.
+  function tryPendingTab() {
+    if (!pendingTab) {
+      try {
+        var v = window.sessionStorage.getItem(PENDING_TAB);
+        if (v !== null) pendingTab = { i: Number(v) || 0, until: Date.now() + 8000 };
+      } catch (e) {}
+    }
+    if (!pendingTab) return;
+    var done = Date.now() > pendingTab.until ||
+      (window.location.pathname === '/home' && clickTab(pendingTab.i));
+    if (!done) return;
+    pendingTab = null;
+    try { window.sessionStorage.removeItem(PENDING_TAB); } catch (e) {}
+    if (bar && loaded) render();
+  }
+
+  // Spaces: a Space card in a post becomes a stub; anything else about Spaces goes.
+  function scanSpaces() {
+    var links = document.querySelectorAll('a[href*="/i/spaces/"]');
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      if (a.closest('[data-xf-space], [data-xf-spacecell], [data-testid="tweetText"]')) continue;
+      if (a.closest('article')) {
+        (a.closest('[data-testid="card.wrapper"]') || a).setAttribute('data-xf-space', '');
+      } else {
+        var cell = a.closest('[data-testid="cellInnerDiv"]');
+        if (cell) cell.setAttribute('data-xf-spacecell', '');
+      }
+    }
   }
 
   // The layer-based greyscale covers the page only while the timer is shown.
@@ -537,7 +674,7 @@
   ['play', 'playing', 'canplay', 'loadeddata'].forEach(function (type) {
     document.addEventListener(type, function (e) {
       var v = e.target;
-      if (v && v.tagName === 'VIDEO') quiet(v);
+      if (v && (v.tagName === 'VIDEO' || v.tagName === 'AUDIO')) quiet(v);
     }, true);
   });
   try {
@@ -545,8 +682,9 @@
     if (proto && typeof proto.play === 'function') {
       var origPlay = proto.play;
       proto.play = function () {
-        if (this && this.tagName === 'VIDEO') {
-          return Promise.reject(new DOMException('Video is turned off by X Focus', 'NotAllowedError'));
+        // No video, and no audio either: the only sound on X is Spaces.
+        if (this && (this.tagName === 'VIDEO' || this.tagName === 'AUDIO')) {
+          return Promise.reject(new DOMException('Video and audio are turned off by X Focus', 'NotAllowedError'));
         }
         return origPlay.apply(this, arguments);
       };
@@ -617,6 +755,7 @@
 
   var host = null, ui = null, uiStyle = null, uiCssChecked = false;
   var greyEl = null, bar = null, timeEl = null, subEl = null, segsEl = null, colorChip = null, ov = null, ovIn = null;
+  var navEl = null, navBtns = [], navH = -1;
   var segFills = [], segKey = '';
   var mode = null, modeArg = null, overlayTick = null;
   var noteText = '', noteUntil = 0;
@@ -664,6 +803,13 @@
       ]),
       segsEl
     ]);
+    navEl = h('div', { class: 'nav', role: 'navigation', 'aria-label': 'Timelines', hidden: '' });
+    navBtns = [0, 1, 2].map(function (i) {
+      var label = h('span', { text: '' });
+      var b = h('button', { type: 'button', onclick: function () { openTab(i); } }, [navIcon(i), label]);
+      navEl.appendChild(b);
+      return { el: b, label: label };
+    });
     ovIn = h('div', { class: 'in' });
     ov = h('div', { class: 'ov', hidden: '' }, [ovIn]);
 
@@ -673,7 +819,54 @@
       ui.appendChild(greyEl);
     }
     ui.appendChild(bar);
+    ui.appendChild(navEl);
     ui.appendChild(ov);
+  }
+
+  // House, two people, and a list: drawn with plain strokes.
+  function navIcon(i) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    var shapes = [
+      [['path', { d: 'M3.5 10.5 12 3.8l8.5 6.7V20a.5.5 0 0 1-.5.5h-5.2v-6.3H9.2v6.3H4a.5.5 0 0 1-.5-.5z' }]],
+      [['circle', { cx: '9', cy: '8', r: '3.3' }], ['path', { d: 'M2.8 20c.4-3.6 3-5.8 6.2-5.8s5.8 2.2 6.2 5.8' }],
+        ['path', { d: 'M15.4 4.9a3.1 3.1 0 0 1 0 6' }], ['path', { d: 'M17.6 14.4c2 .7 3.3 2.7 3.6 5.6' }]],
+      [['path', { d: 'M9 6h11.5M9 12h11.5M9 18h11.5' }], ['circle', { cx: '4.3', cy: '6', r: '1.2', fill: 'currentColor', stroke: 'none' }],
+        ['circle', { cx: '4.3', cy: '12', r: '1.2', fill: 'currentColor', stroke: 'none' }],
+        ['circle', { cx: '4.3', cy: '18', r: '1.2', fill: 'currentColor', stroke: 'none' }]]
+    ][i];
+    shapes.forEach(function (sh) {
+      var el = document.createElementNS(NS, sh[0]);
+      for (var k in sh[1]) el.setAttribute(k, sh[1][k]);
+      svg.appendChild(el);
+    });
+    return svg;
+  }
+
+  function renderNav() {
+    var show = !!(state.nav && loggedIn && host && host.style.display !== 'none');
+    navEl.hidden = !show;
+    if (show) {
+      var names = ['Home', 'Following', state.listName || 'List'], on = activeTab();
+      for (var i = 0; i < navBtns.length; i++) {
+        if (navBtns[i].label.textContent !== names[i]) navBtns[i].label.textContent = names[i];
+        navBtns[i].el.classList.toggle('on', i === on);
+        if (i === on) navBtns[i].el.setAttribute('aria-current', 'page');
+        else navBtns[i].el.removeAttribute('aria-current');
+      }
+    }
+    var hgt = show ? navEl.offsetHeight : 0;
+    if (hgt !== navH) {
+      navH = hgt;
+      document.documentElement.style.setProperty('--xf-nb', hgt + 'px');
+    }
   }
 
   function ensureMounted() {
@@ -712,6 +905,7 @@
   }
 
   function render() {
+    renderNav();
     colorChip.hidden = !peek;
     if (peek) colorChip.textContent = 'Colour ' + fmt(colorLeftSec()) + ' ×';
 
@@ -955,6 +1149,26 @@
     return b;
   }
 
+  // Search, Notifications and Chat, opened through X's own (hidden) links.
+  function goRow() {
+    var row = h('div', { class: 'go' });
+    GO_TO.forEach(function (d) {
+      var label = d.label, link = document.querySelector('[data-testid="' + d.testid + '"]');
+      var unread = link && /(\d+\+?)\s+unread/i.exec(link.getAttribute('aria-label') || '');
+      if (unread) label += ' (' + unread[1] + ')';
+      row.appendChild(h('button', {
+        class: 'btn', type: 'button', text: label,
+        onclick: function () {
+          show(null);
+          var l = document.querySelector('[data-testid="' + d.testid + '"]');
+          if (l) l.click();
+          else window.location.assign(d.path);
+        }
+      }));
+    });
+    return row;
+  }
+
   function buildSettings() {
     var draft = state.pendingLimitMin || state.limitMin;
     var colorDraft = state.colorMin;
@@ -987,11 +1201,12 @@
     paint();
 
     var ads = checkRow('xf-hideads', 'Hide ads', state.hideAds);
-    var clean = checkRow('xf-clean', 'Hide Grok and upsells', state.clean);
+    var clean = checkRow('xf-clean', 'Hide Spaces, Grok and upsells', state.clean);
+    var navBox = checkRow('xf-nav', 'Three buttons at the bottom instead of X\u2019s bar', state.nav);
     var black = checkRow('xf-black', 'True black background', state.blackBg);
     var posts = checkRow('xf-hideposts', 'Hide the whole post when it contains a video', state.hidePosts);
 
-    return [h('div', { class: 'cap', text: 'Daily limit' })]
+    return [goRow(), h('div', { class: 'cap small', text: 'Daily limit' })]
       .concat(limitSlider(draft, function (v) { draft = v; upd(); }))
       .concat([
         effect,
@@ -1001,7 +1216,7 @@
           ? 'Hold a finger on a picture to see that post in colour. Used today: ' +
             Math.floor(state.colorUsedSec / 60) + ' of ' + state.colorMin + ' min.'
           : 'This browser cannot show single posts in colour.' }),
-        h('div', { class: 'checks' }, [ads.row, clean.row, black.row, posts.row]),
+        h('div', { class: 'checks' }, [ads.row, navBox.row, clean.row, black.row, posts.row]),
         h('div', { class: 'cap small', text: 'Last 7 days' })
       ])
       .concat(weekView(lastDays(7, true)))
@@ -1024,6 +1239,7 @@
             state.hideAds = !!ads.box.checked;
             state.clean = !!clean.box.checked;
             state.blackBg = !!black.box.checked;
+            state.nav = !!navBox.box.checked;
             state.hidePosts = !!posts.box.checked;
             applyFlags();
             ensureBlackTheme();
@@ -1181,6 +1397,12 @@
     if (rollover() && (mode === 'lock' || mode === 'checkpoint')) show(null);
     applyFlags();
 
+    if (state.clean && /^\/i\/spaces(\/|$)/.test(window.location.pathname)) {
+      window.location.replace('/home');
+      return;
+    }
+    tryPendingTab();
+
     var auth = isAuthPath();
     setBarVisible(!auth);
     if (auth) {
@@ -1241,6 +1463,10 @@
       scanTimer = 0;
       try { scanVideos(); } catch (e) {}
       try { scanAds(); } catch (e1) {}
+      try { scanSpaces(); } catch (e3) {}
+      try { scanTabs(); } catch (e4) {}
+      try { applyFlags(); tryPendingTab(); } catch (e5) {}
+      try { if (bar && loaded) renderNav(); } catch (e6) {}
       try { adjustLayout(); } catch (e2) {}
     }, 200);
   }
