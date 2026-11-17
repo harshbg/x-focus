@@ -13,7 +13,7 @@ const ok = (c, m) => console.log((c ? 'PASS ' : 'FAIL ') + m);
   await page.route('https://example.org/**', r => r.fulfill({ contentType: 'text/html', body: '<p>other</p>' }));
   await page.addInitScript(() => {
     const store = {}; window.__closed = 0; window.__grey = [];
-    window.XFocusNative = { getValue: k => store[k] || '', setValue: (k, v) => { store[k] = v; }, close: () => { window.__closed++; }, setGrey: on => { window.__grey.push(on); }, _store: store };
+    window.XFocusNative = { getValue: k => store[k] || '', setValue: (k, v) => { store[k] = v; }, close: () => { window.__closed++; }, setGrey: on => { window.__grey.push(on); }, checkUpdate: () => { window.__checks = (window.__checks || 0) + 1; }, _store: store };
   });
   await page.clock.install({ time: new Date() });
   await page.goto('https://x.com/home');
@@ -38,6 +38,14 @@ const ok = (c, m) => console.log((c ? 'PASS ' : 'FAIL ') + m);
   await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent.includes('done')).click());
   await page.clock.runFor(2000);
   ok(await page.evaluate(() => window.__closed) === 1, '"I\'m done" asks the app to close');
+  // manual update check from settings (the unanswered check-in comes back first)
+  await page.clock.runFor(63000);
+  await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Keep going').click());
+  await page.clock.runFor(1500);
+  await page.evaluate(() => document.querySelector('div[data-xfocus]').shadowRoot.querySelector('.main').click());
+  await page.evaluate(() => [...document.querySelector('div[data-xfocus]').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Check for updates').click());
+  await page.clock.runFor(9000);
+  ok(await page.evaluate(() => window.__checks === 1 && /No newer version \(v\d/.test(document.querySelector('div[data-xfocus]').shadowRoot.querySelector('.ov').innerText)), '"Check for updates" asks the app and reports back');
   // not x.com: script is a no-op
   await page.goto('https://example.org/');
   await page.evaluate(script);

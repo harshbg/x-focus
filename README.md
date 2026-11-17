@@ -7,7 +7,7 @@ X (x.com) for one phone, made deliberately less fun:
 - a daily time limit shown as a large countdown at the top, coloured blue, yellow and red by thirds
 - a full-screen check-in every 5 minutes that holds for one minute
 - a small daily allowance for seeing a post in colour: hold a finger on its picture
-- only the Home tabs; the bottom bar, Grok and upsells are hidden
+- Grok and Premium upsells are hidden
 
 ## How it is put together
 
@@ -19,7 +19,7 @@ The same script works as a userscript in Firefox for Android (Violentmonkey) and
 
 ## Updates
 
-The app downloads `x-focus.user.js` from this repository's `main` branch (see `android/update-url.txt`) when it is opened, at most every 30 minutes, and switches to it the next time it comes to the front. So changing the script here changes the app, with nothing to reinstall. Bump `@version` and `VERSION` in the script with each change; the version shows at the bottom of the settings screen.
+The app downloads `x-focus.user.js` from this repository's `main` branch (see `android/update-url.txt`) once a day, and switches to it the next time it comes to the front. "Check for updates" in the settings screen fetches it immediately. So changing the script here changes the app, with nothing to reinstall. Bump `@version` and `VERSION` in the script with each change; the version shows at the bottom of the settings screen.
 
 Anyone who can push to this repository controls what runs inside the signed-in X session. Keep write access to yourself.
 

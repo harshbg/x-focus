@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.0.0
+// @version      2.1.0
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.0.0';
+  var VERSION = '2.1.0';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -36,6 +36,7 @@
   /* ------------------------------------------------------------------ */
 
   var STEP = 300;                 // seconds between check-ins (5 minutes)
+  var BLOCK = 600;                // seconds per block in the progress bar (10 minutes)
   var CHECK_WAIT = 60;            // seconds a check-in holds the screen before "Keep going" unlocks
   var KEY = 'xfocus.v1';
   var MIN_LIMIT = 5, MAX_LIMIT = 90, LIMIT_STEP = 5, DEFAULT_LIMIT = 30;
@@ -78,8 +79,8 @@
     ADS + '>*{display:none!important}',
     ADS + '::before{content:"Ad hidden";' + STUB_LABEL + '}',
     'a[href="/i/video"],a[href^="/i/video/"]{display:none!important}',
-    // "Only the Home tabs": no bottom bar, no Grok, no Premium upsells.
-    CLEAN + '[data-testid="BottomBar"],' + CLEAN + '[data-testid="GrokDrawer"],' + CLEAN + 'a[href="/i/grok"],' +
+    // Clean mode: no Grok, no Premium upsells.
+    CLEAN + '[data-testid="GrokDrawer"],' + CLEAN + 'a[href="/i/grok"],' +
       CLEAN + 'a[href^="/i/premium"],' + CLEAN + 'a[href="/i/verified-choose"],' +
       CLEAN + '[data-testid="super-upsell-UpsellCardRenderProperties"]{display:none!important}'
   ].join('\n');
@@ -105,8 +106,8 @@
       'font-variant-numeric:tabular-nums;cursor:pointer;-webkit-tap-highlight-color:transparent}',
     '.chip.on{background:#fff;color:#000}',
     '.segs{display:flex;gap:2px;margin-top:6px;height:6px}',
-    '.seg{flex:1 1 0;background:#3d3d3d;position:relative;overflow:hidden;border-radius:1px}',
-    '.seg b{position:absolute;top:0;right:0;bottom:0;left:0;background:#fff;transform-origin:right center}',
+    '.seg{flex:1 1 0;min-width:0;background:#3d3d3d;position:relative;overflow:hidden;border-radius:1px}',
+    '.seg b{position:absolute;top:0;right:0;bottom:0;left:0;background:#fff}',
     '.bar.low .time{animation:xfblink 1s steps(2,jump-none) infinite}',
     '.bar.flash{animation:xfflash .5s steps(2,jump-none) 5}',
     '@keyframes xfblink{50%{opacity:.25}}',
@@ -152,7 +153,7 @@
     colorMin: 5,          // minutes of colour per day (0 = off)
     hidePosts: false,     // hide whole posts that contain video
     hideAds: true,
-    clean: true,          // only the Home tabs: no bottom bar, Grok or upsells
+    clean: true,          // hide Grok and Premium upsells
     blackBg: true,        // ask X for its pure-black theme
     day: '',
     usedSec: 0,
@@ -292,6 +293,21 @@
     return f < 1 / 3 ? 0 : f < 2 / 3 ? 1 : 2;
   }
 
+  // Colour for the stretch of the day from a to b seconds. A block that
+  // crosses a third is split at exactly that point.
+  function blockPaint(a, b) {
+    var lim = state.limitMin * 60, cuts = [lim / 3, 2 * lim / 3], parts = [], from = a;
+    for (var i = 0; i < cuts.length; i++) {
+      if (cuts[i] > from + 0.5 && cuts[i] < b - 0.5) { parts.push([from, cuts[i]]); from = cuts[i]; }
+    }
+    parts.push([from, b]);
+    if (parts.length === 1) return ZONES[zoneAt((a + b) / 2)];
+    function pct(x) { return ((x - a) / (b - a) * 100).toFixed(1) + '%'; }
+    return 'linear-gradient(to right, ' + parts.map(function (p) {
+      return ZONES[zoneAt((p[0] + p[1]) / 2)] + ' ' + pct(p[0]) + ' ' + pct(p[1]);
+    }).join(', ') + ')';
+  }
+
   /* ------------------------------------------------------------------ */
   /* Page styling (greyscale fallback, video and ad removal, clean mode) */
   /* ------------------------------------------------------------------ */
@@ -352,7 +368,6 @@
   function applyFlags() {
     flag('data-xf-hideposts', state.hidePosts);
     flag('data-xf-hideads', state.hideAds);
-    // Signed out, the bottom bar holds the sign-in buttons, so leave it alone.
     flag('data-xf-clean', state.clean && checkLoggedIn());
   }
 
@@ -549,8 +564,8 @@
   /* ------------------------------------------------------------------ */
 
   var host = null, ui = null, uiStyle = null, uiCssChecked = false;
-  var greyEl = null, bar = null, timeEl = null, subEl = null, segsEl = null, colorChip = null, homeChip = null, ov = null, ovIn = null;
-  var segFills = [];
+  var greyEl = null, bar = null, timeEl = null, subEl = null, segsEl = null, colorChip = null, ov = null, ovIn = null;
+  var segFills = [], segKey = '';
   var mode = null, modeArg = null, overlayTick = null;
   var noteText = '', noteUntil = 0;
 
@@ -587,15 +602,13 @@
     subEl = h('span', { class: 'sub', text: '' });
     segsEl = h('div', { class: 'segs' });
     colorChip = h('button', { class: 'chip on', type: 'button', hidden: '', 'aria-label': 'Stop showing colour', onclick: function () { endPeek(); } });
-    homeChip = h('button', { class: 'chip', type: 'button', hidden: '', text: 'Home', onclick: goHome });
     bar = h('div', { class: 'bar' }, [
       h('div', { class: 'row' }, [
         h('button', { class: 'main', type: 'button', 'aria-label': 'Time left today. Open settings.', onclick: onBarTap }, [
           timeEl,
           h('span', { class: 'meta' }, [h('span', { class: 'lbl', text: 'left today' }), subEl])
         ]),
-        colorChip,
-        homeChip
+        colorChip
       ]),
       segsEl
     ]);
@@ -647,7 +660,6 @@
   }
 
   function render() {
-    homeChip.hidden = !(state.clean && loggedIn && window.location.pathname !== '/home');
     colorChip.hidden = !peek;
     if (peek) colorChip.textContent = 'Colour ' + fmt(colorLeftSec()) + ' ×';
 
@@ -662,20 +674,29 @@
       : Math.floor(used / 60) + ' of ' + Math.round(budget / 60) + ' min used';
     bar.style.setProperty('--zone', ZONES[zoneAt(used)]);
 
-    var n = Math.max(1, Math.ceil(budget / STEP));
-    if (segFills.length !== n) {
+    // One block per 10 minutes; a shorter last block is drawn narrower.
+    var n = Math.max(1, Math.ceil(budget / BLOCK));
+    var key = budget + '/' + state.limitMin;
+    if (segKey !== key) {
+      segKey = key;
       while (segsEl.firstChild) segsEl.removeChild(segsEl.firstChild);
       segFills = [];
       for (var i = 0; i < n; i++) {
+        var from = i * BLOCK, to = Math.min(budget, from + BLOCK);
         var fill = document.createElement('b');
-        segsEl.appendChild(h('i', { class: 'seg' }, [fill]));
-        segFills.push(fill);
+        fill.style.background = blockPaint(from, to);
+        var seg = h('i', { class: 'seg' }, [fill]);
+        seg.style.flexGrow = String(Math.max(1, to - from));
+        segsEl.appendChild(seg);
+        segFills.push({ el: fill, from: from, len: Math.max(1, to - from) });
       }
     }
-    for (var j = 0; j < n; j++) {
-      var spent = Math.min(1, Math.max(0, (state.usedSec - j * STEP) / STEP));
-      segFills[j].style.transform = 'scaleX(' + (1 - spent).toFixed(3) + ')';
-      segFills[j].style.background = ZONES[zoneAt((j + 0.5) * STEP)];
+    for (var j = 0; j < segFills.length; j++) {
+      var f = segFills[j];
+      var spent = Math.min(1, Math.max(0, (state.usedSec - f.from) / f.len));
+      var clip = 'inset(0 0 0 ' + (spent * 100).toFixed(1) + '%)';
+      f.el.style.clipPath = clip;
+      f.el.style.webkitClipPath = clip;
     }
     bar.classList.toggle('low', rem > 0 && rem <= STEP);
   }
@@ -701,7 +722,7 @@
       : m === 'lock' ? buildLock()
       : m === 'settings' ? buildSettings()
       : buildBye();
-    for (var i = 0; i < kids.length; i++) ovIn.appendChild(kids[i]);
+    for (var i = 0; i < kids.length; i++) if (kids[i]) ovIn.appendChild(kids[i]);
     ov.hidden = false;
     ov.scrollTop = 0;
   }
@@ -710,12 +731,6 @@
     if (!loaded || mode) return;
     if (!state.limitMin) return;
     show('settings');
-  }
-
-  function goHome() {
-    var link = document.querySelector('[data-testid="AppTabBar_Home_Link"], a[href="/home"]');
-    if (link) link.click();
-    else window.location.assign('/home');
   }
 
   // A 5-to-90-minute slider in 5-minute steps. onChange gets the new value.
@@ -827,6 +842,21 @@
     return { box: box, row: h('label', { class: 'check', for: id }, [box, h('span', { text: label })]) };
   }
 
+  // In the app: fetch the newest script now instead of waiting for the daily check.
+  // If there is one, the app reloads X with it; otherwise this button reports back.
+  function updateButton() {
+    if (!NATIVE || typeof NATIVE.checkUpdate !== 'function') return null;
+    var b = h('button', { class: 'btn ghost', type: 'button', text: 'Check for updates' });
+    b.addEventListener('click', function () {
+      if (b.disabled) return;
+      b.disabled = true;
+      b.textContent = 'Checking…';
+      try { NATIVE.checkUpdate(); } catch (e) {}
+      setTimeout(function () { b.textContent = 'No newer version (v' + VERSION + ')'; }, 8000);
+    });
+    return b;
+  }
+
   function buildSettings() {
     var draft = state.pendingLimitMin || state.limitMin;
     var colorDraft = state.colorMin;
@@ -859,7 +889,7 @@
     paint();
 
     var ads = checkRow('xf-hideads', 'Hide ads', state.hideAds);
-    var clean = checkRow('xf-clean', 'Only the Home tabs: hide the bottom bar, Grok and upsells', state.clean);
+    var clean = checkRow('xf-clean', 'Hide Grok and upsells', state.clean);
     var black = checkRow('xf-black', 'True black background', state.blackBg);
     var posts = checkRow('xf-hideposts', 'Hide the whole post when it contains a video', state.hidePosts);
 
@@ -876,6 +906,7 @@
         h('div', { class: 'checks' }, [ads.row, clean.row, black.row, posts.row]),
         h('p', { class: 'note', text: 'Used today: ' + Math.floor(state.usedSec / 60) + ' min' +
           (state.extCount ? ' · extra time taken ' + state.extCount + '×' : '') + ' · v' + VERSION }),
+        updateButton(),
         h('button', {
           class: 'btn', type: 'button', text: 'Done',
           onclick: function () {

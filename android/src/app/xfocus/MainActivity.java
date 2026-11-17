@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
     private static final String STATE_KEY = "xfocus.v1";
     private static final String SCRIPT_FILE = "x-focus.user.js";
     private static final int FILE_REQUEST = 41;
-    private static final long CHECK_EVERY_MS = 30 * 60 * 1000L;
+    private static final long CHECK_EVERY_MS = 24 * 60 * 60 * 1000L;
     private static final int MAX_SCRIPT_BYTES = 512 * 1024;
     private static final Pattern VERSION = Pattern.compile("@version\\s+([0-9]+(?:\\.[0-9]+)*)");
 
@@ -224,21 +224,22 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void checkForUpdate() {
+    /** Looks for a newer script once a day, or right away when the user asks from settings. */
+    private void checkForUpdate(final boolean askedByUser) {
         if (Config.UPDATE_URL.length() == 0) return;
         long now = System.currentTimeMillis();
-        if (now - prefs.getLong("lastCheck", 0) < CHECK_EVERY_MS) return;
+        if (!askedByUser && now - prefs.getLong("lastCheck", 0) < CHECK_EVERY_MS) return;
         prefs.edit().putLong("lastCheck", now).apply();
         final String current = script;
         new Thread(new Runnable() {
             @Override
             public void run() {
-                fetchUpdate(current);
+                fetchUpdate(current, askedByUser);
             }
         }).start();
     }
 
-    private void fetchUpdate(String current) {
+    private void fetchUpdate(String current, final boolean applyNow) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(Config.UPDATE_URL).openConnection();
@@ -260,8 +261,8 @@ public class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    // Just opened: switch now. Otherwise wait for the next time the app comes to the front.
-                    if (resumed && System.currentTimeMillis() - resumedAt < 10000) applyPending();
+                    // Asked for, or just opened: switch now. Otherwise wait for the next time the app comes to the front.
+                    if (applyNow || (resumed && System.currentTimeMillis() - resumedAt < 10000)) applyPending();
                 }
             });
         } catch (Exception ignored) {
@@ -300,6 +301,16 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     setNativeGrey(on);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void checkUpdate() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    checkForUpdate(true);
                 }
             });
         }
@@ -419,7 +430,7 @@ public class MainActivity extends Activity {
         resumedAt = System.currentTimeMillis();
         if (web != null) web.onResume();
         applyPending();
-        checkForUpdate();
+        checkForUpdate(false);
     }
 
     @Override

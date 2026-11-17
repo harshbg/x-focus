@@ -41,7 +41,7 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   ok(/^29:5\d$/.test(time1), 'timer counting down: ' + time1);
   const grey = await page.evaluate(`({ layer: getComputedStyle(${R}.querySelector('.grey')).backdropFilter, root: document.documentElement.hasAttribute('data-xf-rootgrey'), zone: ${R}.querySelector('.bar').style.getPropertyValue('--zone'), segs: [...${R}.querySelectorAll('.seg b')].map(b => b.style.background) })`);
   ok(grey.layer.includes('grayscale') && grey.root === false, 'grey layer active, root filter off');
-  ok(grey.zone === '#4aa3ff' && grey.segs.length === 6 && grey.segs[0] === grey.segs[1] && grey.segs[2] === grey.segs[3] && grey.segs[4] === grey.segs[5] && new Set(grey.segs).size === 3, 'timer zones: blue, yellow, red in equal thirds ' + JSON.stringify(grey.segs));
+  ok(grey.zone === '#4aa3ff' && grey.segs.length === 3 && grey.segs[0] === 'rgb(74, 163, 255)' && grey.segs[1] === 'rgb(255, 214, 10)' && grey.segs[2] === 'rgb(255, 69, 58)', '30 min = three 10-minute blocks: blue, yellow, red ' + JSON.stringify(grey.segs));
   const lay = await page.evaluate(() => { const h = document.querySelector('div[data-xfocus]').getBoundingClientRect().height; return { h, pad: getComputedStyle(document.body).paddingTop, hdrTop: document.getElementById('hdr').getBoundingClientRect().top }; });
   ok(lay.h > 50 && parseFloat(lay.pad) === lay.h && lay.hdrTop === lay.h, 'bar pushes page down ' + JSON.stringify(lay));
   await page.evaluate(() => window.scrollTo(0, 900)); await page.clock.runFor(2000);
@@ -50,8 +50,7 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   ok(vid.n === 10 && vid.cls === 'mwrap' && vid.h < 50 && vid.textVisible && vid.photoVisible === 180, 'videos collapsed to stub, text+photos kept');
   const ads = await page.evaluate(() => { const a = id => { const art = document.querySelector('#' + id + ' article'); return { marked: art.hasAttribute('data-xf-ad'), h: art.getBoundingClientRect().height, label: getComputedStyle(art, '::before').content, shown: [...art.children].filter(c => c.getBoundingClientRect().height > 0).length }; }; return { ad1: a('ad1'), ad2: a('ad2'), c8: a('c8') }; });
   ok(ads.ad1.marked && ads.ad2.marked && ads.ad1.h < 50 && ads.ad2.h < 50 && ads.ad1.shown === 0 && ads.ad2.shown === 0 && /Ad hidden/.test(ads.ad1.label) && !ads.c8.marked && ads.c8.shown > 0, 'ads become an empty dotted "Ad hidden" box; a post that only mentions Ad is kept ' + JSON.stringify(ads));
-  ok(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid=BottomBar]')).display) === 'none', 'bottom bar hidden in clean mode');
-  ok((await sh(page, '.chip:not(.on)')).hidden === true, 'Home chip hidden while on /home');
+  ok(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid=BottomBar]')).display) !== 'none', 'bottom bar stays');
   const play = await page.evaluate(async () => { const v = document.querySelector('video'); try { await v.play(); return 'played'; } catch (e) { return e.name; } });
   ok(play === 'NotAllowedError', 'video.play() blocked');
   await page.evaluate(() => window.scrollTo(0, 0)); await page.clock.runFor(500);
@@ -119,6 +118,18 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   await page.clock.runFor(2500);
   s = await st(page);
   ok((await ovText(page)) === null && s.extCount === 1 && s.extraSec === 300 && /^04:5\d$/.test((await sh(page, '.time')).text), 'unlocked with 5 more min; no time counted while locked');
+  await ctx.close();
+
+  // 90 minutes = nine blocks, 3 blue, 3 yellow, 3 red; 20 minutes splits a block exactly at each third
+  ({ ctx, page } = await open({ limitMin: 90, day: today(), usedSec: 900, ts: Date.now() }));
+  const b90 = await page.evaluate(`[...${R}.querySelectorAll('.seg b')].map(b => [b.style.background, b.style.clipPath])`);
+  const cols = b90.map(x => x[0]);
+  ok(cols.length === 9 && cols.slice(0, 3).every(c => c === 'rgb(74, 163, 255)') && cols.slice(3, 6).every(c => c === 'rgb(255, 214, 10)') && cols.slice(6).every(c => c === 'rgb(255, 69, 58)'), '90 min = 9 blocks: 3 blue, 3 yellow, 3 red');
+  ok(/inset\(0(px)? 0(px)? 0(px)? 100%\)/.test(b90[0][1]) && /5\d(\.\d)?%\)/.test(b90[1][1]) && /0(px)? 0(px)? 0(px)? 0(%|px)\)/.test(b90[2][1]), 'after 15 min: first block spent, second about half, rest full ' + JSON.stringify(b90.slice(0, 3).map(x => x[1])));
+  await ctx.close();
+  ({ ctx, page } = await open({ limitMin: 20, day: today(), usedSec: 10, ts: Date.now() }));
+  const b20 = await page.evaluate(`[...${R}.querySelectorAll('.seg b')].map(b => b.style.background)`);
+  ok(b20.length === 2 && /linear-gradient/.test(b20[0]) && /66\.7%/.test(b20[0]) && /33\.3%/.test(b20[1]), '20 min = 2 blocks, split at exact thirds ' + JSON.stringify(b20));
   await ctx.close();
 
   // 4. new day resets, pending limit applies; old 180-minute limits are capped

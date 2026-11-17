@@ -77,19 +77,19 @@ code{font-family:var(--mono);font-size:.9em;background:var(--panel);padding:1px 
   <section>
     <h2>What happens when you use it</h2>
     <dl>
-      <div><dt>The clock runs only while X is on screen</dt><dd>The digits and the blocks under them are blue for the first third of your limit, yellow for the middle third and red for the last. One block is five minutes. It resets at midnight.</dd></div>
+      <div><dt>The clock runs only while X is on screen</dt><dd>The digits and the blocks under them are blue for the first third of your limit, yellow for the middle third and red for the last. One block is ten minutes. It resets at midnight.</dd></div>
       <div><dt>Every five minutes the screen goes black for a minute</dt><dd>It tells you how many minutes are gone and asks whether this is still useful. "Keep going" unlocks after 60 seconds. Your clock is paused while you wait. "I'm done" closes X.</dd></div>
       <div><dt>At zero, X is locked until tomorrow</dt><dd>You can take 5 more minutes, but only after a 30-second wait that grows each time you do it.</dd></div>
       <div><dt>Video and ads become a small dotted box</dt><dd>"Video hidden" keeps the post's text. "Ad hidden" shows nothing of the ad at all. The app also refuses to download video.</dd></div>
       <div><dt>Hold a picture to see that post in colour</dt><dd>You get 5 minutes of colour a day. Its own clock appears in the timer bar and runs only while colour is on. Tap it to stop, or scroll the post away. Opening the photo full-screen keeps it in colour.</dd></div>
-      <div><dt>Only the Home tabs</dt><dd>The bottom bar, Grok and upsells are hidden. Pin your list in X so it sits beside For you and Following. A Home button appears in the timer bar whenever you are somewhere else.</dd></div>
+      <div><dt>Less clutter</dt><dd>Grok and the Premium upsells are hidden. Pin your list in X so it sits beside For you and Following at the top of Home.</dd></div>
       <div><dt>Tap the timer for settings</dt><dd>A slider sets the limit from 5 to 90 minutes. Lowering applies at once; raising applies from the next day. Colour can be 5 or 10 minutes, or off, and each of the items above has its own switch.</dd></div>
     </dl>
   </section>
 
   <section>
     <h2>Updates</h2>
-    <p>Each time you open it, the app looks on GitHub for a newer version of its script and switches to it the next time you come back to the app. There is nothing to reinstall. The version number is at the bottom of the settings screen.</p>
+    <p>Once a day the app looks on GitHub for a newer version of its script and switches to it the next time you come back to the app. To get one straight away, tap the timer and choose <strong>Check for updates</strong>. There is nothing to reinstall. The version number is at the bottom of the settings screen.</p>
   </section>
 
   <section>
@@ -136,7 +136,7 @@ code{font-family:var(--mono);font-size:.9em;background:var(--panel);padding:1px 
 
   // Demo bar: same look as the real one, counting down from a sample 30-minute day.
   var segs = document.getElementById('demoSegs'), fills = [], used = 379, limit = 1800;
-  for (var i = 0; i < 6; i++) { var s = document.createElement('i'), b = document.createElement('b'); s.appendChild(b); segs.appendChild(s); fills.push(b); }
+  for (var i = 0; i < 3; i++) { var s = document.createElement('i'), b = document.createElement('b'); s.appendChild(b); segs.appendChild(s); fills.push(b); }
   function p(n) { return (n < 10 ? '0' : '') + n; }
   function draw() {
     var rem = limit - used;
@@ -144,8 +144,8 @@ code{font-family:var(--mono);font-size:.9em;background:var(--panel);padding:1px 
     document.getElementById('demoSub').textContent = Math.floor(used / 60) + ' of 30 min used';
     var z = used < 600 ? 1 : used < 1200 ? 2 : 3;
     document.getElementById('demoTime').style.color = 'var(--zone-' + z + ')';
-    for (var j = 0; j < 6; j++) fills[j].style.background = 'var(--zone-' + (j < 2 ? 1 : j < 4 ? 2 : 3) + ')';
-    for (var j = 0; j < 6; j++) fills[j].style.transform = 'scaleX(' + (1 - Math.min(1, Math.max(0, (used - j * 300) / 300))) + ')';
+    for (var j = 0; j < 3; j++) fills[j].style.background = 'var(--zone-' + (j + 1) + ')';
+    for (var j = 0; j < 3; j++) fills[j].style.transform = 'scaleX(' + (1 - Math.min(1, Math.max(0, (used - j * 600) / 600))) + ')';
   }
   draw();
   setInterval(function () { used = used >= limit - 1 ? 379 : used + 1; draw(); }, 1000);
