@@ -1,0 +1,153 @@
+const { chromium, devices } = require('playwright');
+const fs = require('fs');
+const script = fs.readFileSync(require('path').join(__dirname, '..', 'x-focus.user.js'), 'utf8');
+const mock = fs.readFileSync(require('path').join(__dirname, 'mock.html'), 'utf8');
+let fails = 0;
+const ok = (c, m) => { if (!c) fails++; console.log((c ? 'PASS ' : 'FAIL ') + m); };
+const R = "document.querySelector('div[data-xfocus]').shadowRoot";
+const sh = (page, sel) => page.evaluate(`(() => { const e = ${R}.querySelector(${JSON.stringify(sel)}); return e ? { text: e.textContent, hidden: e.hidden, disabled: e.disabled } : null; })()`);
+const ovText = page => page.evaluate(`(() => { const o = ${R}.querySelector('.ov'); return o.hidden ? null : o.innerText; })()`);
+const clickBtn = (page, label) => page.evaluate(`(() => { const b = [...${R}.querySelectorAll('button')].find(b => b.textContent.trim().startsWith(${JSON.stringify(label)})); if (!b) return 'nobtn'; if (b.disabled) return 'disabled'; b.click(); return 'ok'; })()`);
+const slide = (page, v) => page.evaluate(`(() => { const i = ${R}.querySelector('#xf-limit'); i.value = '${v}'; i.dispatchEvent(new Event('input', { bubbles: true })); return { min: i.min, max: i.max, step: i.step, shown: ${R}.querySelector('.val').textContent }; })()`);
+const st = page => page.evaluate(() => JSON.parse(localStorage.getItem('xfocus.v1')));
+const today = () => { const d = new Date(); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+const flat = s => (s || '').replace(/\n/g, ' ');
+
+(async () => {
+  const browser = await chromium.launch();
+  async function open(seed, path = '/home') {
+    const ctx = await browser.newContext({ ...devices['Pixel 7'] });
+    const page = await ctx.newPage();
+    page.on('pageerror', e => { fails++; console.log('PAGEERROR', e.message); });
+    await page.route('https://x.com/**', r => r.fulfill({ contentType: 'text/html', body: mock }));
+    await page.clock.install({ time: new Date() });
+    if (seed) await page.addInitScript(s => { if (!localStorage.getItem('xfocus.v1')) localStorage.setItem('xfocus.v1', JSON.stringify(s)); }, seed);
+    await page.addInitScript(script);
+    await page.goto('https://x.com' + path);
+    await page.clock.runFor(1500);
+    return { ctx, page };
+  }
+  const longPress = async (page, sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.move(b.x + 40, b.y + 40); await page.mouse.down(); await page.clock.runFor(700); await page.mouse.up(); await page.clock.runFor(300); };
+
+  // 1. first run, slider setup
+  let { ctx, page } = await open(null);
+  ok(/MINUTES OF X PER DAY/i.test(await ovText(page) || ''), 'setup overlay on first run');
+  const sl = await slide(page, 30);
+  ok(sl.min === '5' && sl.max === '90' && sl.step === '5' && sl.shown === '30 min', 'limit slider 5 to 90 in steps of 5 ' + JSON.stringify(sl));
+  await clickBtn(page, 'Start');
+  await page.clock.runFor(3000);
+  ok((await ovText(page)) === null, 'setup dismissed');
+  const time1 = (await sh(page, '.time')).text;
+  ok(/^29:5\d$/.test(time1), 'timer counting down: ' + time1);
+  const grey = await page.evaluate(`({ layer: getComputedStyle(${R}.querySelector('.grey')).backdropFilter, root: document.documentElement.hasAttribute('data-xf-rootgrey'), zone: ${R}.querySelector('.bar').style.getPropertyValue('--zone'), segs: [...${R}.querySelectorAll('.seg b')].map(b => b.style.background) })`);
+  ok(grey.layer.includes('grayscale') && grey.root === false, 'grey layer active, root filter off');
+  ok(grey.zone === '#4aa3ff' && grey.segs.length === 6 && grey.segs[0] === grey.segs[1] && grey.segs[2] === grey.segs[3] && grey.segs[4] === grey.segs[5] && new Set(grey.segs).size === 3, 'timer zones: blue, yellow, red in equal thirds ' + JSON.stringify(grey.segs));
+  const lay = await page.evaluate(() => { const h = document.querySelector('div[data-xfocus]').getBoundingClientRect().height; return { h, pad: getComputedStyle(document.body).paddingTop, hdrTop: document.getElementById('hdr').getBoundingClientRect().top }; });
+  ok(lay.h > 50 && parseFloat(lay.pad) === lay.h && lay.hdrTop === lay.h, 'bar pushes page down ' + JSON.stringify(lay));
+  await page.evaluate(() => window.scrollTo(0, 900)); await page.clock.runFor(2000);
+  ok(await page.evaluate(() => document.getElementById('hdr').getBoundingClientRect().top) === lay.h, 'sticky header sits under bar after scroll');
+  const vid = await page.evaluate(() => { const m = [...document.querySelectorAll('[data-xf-video]')]; const c0 = document.getElementById('c0'); return { n: m.length, cls: m[0] && m[0].className, h: m[0] && m[0].getBoundingClientRect().height, textVisible: c0.querySelector('[data-testid=tweetText]').getBoundingClientRect().height > 0, photoVisible: document.querySelector('#c1 .ph').getBoundingClientRect().height }; });
+  ok(vid.n === 10 && vid.cls === 'mwrap' && vid.h < 50 && vid.textVisible && vid.photoVisible === 180, 'videos collapsed to stub, text+photos kept');
+  const ads = await page.evaluate(() => { const a = id => { const art = document.querySelector('#' + id + ' article'); return { marked: art.hasAttribute('data-xf-ad'), h: art.getBoundingClientRect().height, label: getComputedStyle(art, '::before').content, shown: [...art.children].filter(c => c.getBoundingClientRect().height > 0).length }; }; return { ad1: a('ad1'), ad2: a('ad2'), c8: a('c8') }; });
+  ok(ads.ad1.marked && ads.ad2.marked && ads.ad1.h < 50 && ads.ad2.h < 50 && ads.ad1.shown === 0 && ads.ad2.shown === 0 && /Ad hidden/.test(ads.ad1.label) && !ads.c8.marked && ads.c8.shown > 0, 'ads become an empty dotted "Ad hidden" box; a post that only mentions Ad is kept ' + JSON.stringify(ads));
+  ok(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid=BottomBar]')).display) === 'none', 'bottom bar hidden in clean mode');
+  ok((await sh(page, '.chip:not(.on)')).hidden === true, 'Home chip hidden while on /home');
+  const play = await page.evaluate(async () => { const v = document.querySelector('video'); try { await v.play(); return 'played'; } catch (e) { return e.name; } });
+  ok(play === 'NotAllowedError', 'video.play() blocked');
+  await page.evaluate(() => window.scrollTo(0, 0)); await page.clock.runFor(500);
+  await page.evaluate(() => document.getElementById('modal').classList.add('on')); await page.clock.runFor(2000);
+  const mod = await page.evaluate(() => { const r = document.getElementById('modal').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, ih: innerHeight }; });
+  ok(mod.top === lay.h && mod.bottom === mod.ih, 'full-screen sheet moved below bar');
+  await page.evaluate(() => document.getElementById('modal').classList.remove('on'));
+
+  // colour peek
+  await longPress(page, '#c1 .ph');
+  let pk = await page.evaluate(`({ clip: ${R}.querySelector('.grey').style.clipPath, chip: ${R}.querySelector('.chip.on').textContent, hidden: ${R}.querySelector('.chip.on').hidden, path: location.pathname })`);
+  ok(pk.clip.startsWith('polygon(evenodd') && !pk.hidden && /Colour 0[45]:\d\d/.test(pk.chip) && pk.path === '/home', 'long-press on a picture opens a colour window and does not open the post ' + pk.chip);
+  await page.clock.runFor(10000);
+  let s = await st(page);
+  ok(s.colorUsedSec >= 8 && s.colorUsedSec <= 12, 'colour clock ticks only while colour is on: ' + s.colorUsedSec);
+  await page.evaluate(`${R}.querySelector('.chip.on').click()`); await page.clock.runFor(5000);
+  ok((await sh(page, '.chip.on')).hidden && (await st(page)).colorUsedSec <= 12 && await page.evaluate(`${R}.querySelector('.grey').style.clipPath`) === '', 'tapping the colour chip ends it and stops its clock');
+  await longPress(page, '#c2 [data-testid=tweetText]');
+  ok((await sh(page, '.chip.on')).hidden, 'long-press on plain text does nothing');
+
+  // settings
+  await page.evaluate(`${R}.querySelector('.main').click()`);
+  ok(/DAILY LIMIT/i.test(await ovText(page) || ''), 'settings opens on bar tap');
+  await slide(page, 40);
+  await clickBtn(page, '10 min');
+  await page.evaluate(`${R}.querySelector('#xf-hideposts').click()`);
+  await clickBtn(page, 'Done'); await page.clock.runFor(1200);
+  s = await st(page);
+  ok(s.limitMin === 30 && s.pendingLimitMin === 40 && s.pendingFrom > today() && s.hidePosts === true && s.colorMin === 10 && s.hideAds === true && s.clean === true, 'raise deferred to tomorrow; colour 10 min and toggles saved');
+  ok(await page.evaluate(() => document.getElementById('c0').getBoundingClientRect().height === 0 && document.getElementById('c1').getBoundingClientRect().height > 0), 'video posts hidden entirely when option on');
+  ok(await page.evaluate(() => /night_mode=2/.test(document.cookie)), 'black theme cookie set');
+  await ctx.close();
+
+  // 2. check-in: one minute, clock paused
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 596, ackCp: 1, ts: Date.now() }));
+  await page.clock.runFor(5000);
+  let t = await ovText(page);
+  ok(/10\s*MINUTES GONE/i.test(flat(t)), 'check-in at 10 min');
+  await page.clock.runFor(40000);
+  ok((await clickBtn(page, 'Keep going')) === 'disabled', 'still locked 45 s into the check-in');
+  await page.clock.runFor(21000);
+  ok((await clickBtn(page, 'Keep going')) === 'ok', 'keep going enabled after one minute');
+  await page.clock.runFor(1500);
+  s = await st(page);
+  ok((await ovText(page)) === null && s.ackCp === 2 && s.usedSec < 603, 'check-in dismissed; the minute of waiting did not use the budget: ' + s.usedSec);
+  await page.clock.runFor(60000);
+  ok((await ovText(page)) === null, 'no repeat until next 5 min');
+  await ctx.close();
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 905, ackCp: 2, ts: Date.now() }));
+  ok(/15\s*MINUTES GONE/i.test(flat(await ovText(page))), 'unacknowledged check-in returns after reload');
+  ok(await page.evaluate(`${R}.querySelector('.bar').style.getPropertyValue('--zone')`) === '#ffd60a', 'middle third is yellow');
+  await ctx.close();
+
+  // 3. lock + extension
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 1796, ackCp: 5, ts: Date.now() }));
+  ok(await page.evaluate(`${R}.querySelector('.bar').style.getPropertyValue('--zone')`) === '#ff453a', 'last third is red');
+  await page.clock.runFor(6000);
+  ok(/TIME.S UP/i.test(await ovText(page) || ''), 'locks at limit');
+  ok((await sh(page, '.time')).text === '00:00', 'timer shows 00:00');
+  await page.clock.runFor(20000);
+  await clickBtn(page, 'I need 5 more');
+  ok((await clickBtn(page, 'Wait')) === 'disabled', 'extension wait running');
+  await page.clock.runFor(31000);
+  ok((await clickBtn(page, 'Take 5 more')) === 'ok', 'extension granted after wait');
+  await page.clock.runFor(2500);
+  s = await st(page);
+  ok((await ovText(page)) === null && s.extCount === 1 && s.extraSec === 300 && /^04:5\d$/.test((await sh(page, '.time')).text), 'unlocked with 5 more min; no time counted while locked');
+  await ctx.close();
+
+  // 4. new day resets, pending limit applies; old 180-minute limits are capped
+  ({ ctx, page } = await open({ limitMin: 30, pendingLimitMin: 40, pendingFrom: today(), day: '2020-01-01', usedSec: 1800, colorUsedSec: 250, ackCp: 6, extCount: 2, extraSec: 600, ts: 5 }));
+  s = await st(page);
+  ok(s.limitMin === 40 && s.usedSec < 5 && s.colorUsedSec === 0 && s.extCount === 0 && s.day === today(), 'new day: reset + pending limit applied');
+  const before = (await sh(page, '.time')).text;
+  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true }); });
+  await page.clock.runFor(30000);
+  ok((await sh(page, '.time')).text === before, 'no counting while tab hidden');
+  await ctx.close();
+
+  // 5. colour allowance runs out
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 100, colorUsedSec: 295, ts: Date.now() }));
+  await longPress(page, '#c1 .ph');
+  ok(!(await sh(page, '.chip.on')).hidden, 'colour starts with 5 s left');
+  await page.clock.runFor(7000);
+  ok((await sh(page, '.chip.on')).hidden && /used up/.test((await sh(page, '.sub')).text), 'colour ends when the allowance is spent: ' + (await sh(page, '.sub')).text);
+  await page.clock.runFor(5000);
+  await longPress(page, '#c1 .ph');
+  ok((await sh(page, '.chip.on')).hidden && /No colour time left/.test((await sh(page, '.sub')).text), 'no more colour today');
+  await ctx.close();
+
+  // 6. login page untouched, but still grey
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 100, ts: Date.now() }, '/i/flow/login'));
+  await page.clock.runFor(5000);
+  const lg = await page.evaluate(() => ({ disp: getComputedStyle(document.querySelector('div[data-xfocus]')).display, pad: getComputedStyle(document.body).paddingTop, filter: getComputedStyle(document.documentElement).filter }));
+  ok(lg.disp === 'none' && lg.pad === '0px' && lg.filter.includes('grayscale') && (await st(page)).usedSec === 100, 'login flow: no bar, no counting, still grey');
+  await ctx.close();
+  await browser.close();
+  console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
+})().catch(e => { console.error('ERR', e); process.exit(1); });

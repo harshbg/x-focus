@@ -1,0 +1,8 @@
+# Signing key and built files stay off GitHub
+android/signing.jks
+android/build/
+android/assets/
+*.apk
+*.idsig
+install.html
+x-focus-source.zip

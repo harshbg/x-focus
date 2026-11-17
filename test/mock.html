@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body{margin:0;font:15px system-ui;background:#fff}
+#hdr{position:sticky;top:0;background:#fff;height:53px;z-index:3;border-bottom:1px solid #ccc;display:flex;align-items:center;justify-content:space-around;color:#1d9bf0;font-weight:700}
+article{padding:12px;border-bottom:1px solid #ddd}
+.ph{background:linear-gradient(45deg,#e0245e,#1d9bf0);height:180px;border-radius:12px;margin:8px 0}
+.bb{position:fixed;bottom:0;left:0;right:0;height:50px;background:#eee;border-top:1px solid #ccc;text-align:center;line-height:50px}
+.modal{position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;z-index:9;display:none}
+.modal.on{display:block}
+</style></head><body><div id="react-root">
+<div id="layers"><div class="bb" data-testid="BottomBar"><a data-testid="AppTabBar_Home_Link" href="/home">Home</a> Search Notifications</div>
+<div class="modal" id="modal"><div id="modaltop" style="display:flex;justify-content:space-between;padding:12px"><button>✕</button><button id="postbtn">Post</button></div><textarea>compose</textarea></div></div>
+<main><div id="hdr"><div data-testid="TopNavBar">For you</div><div>Following</div></div><section id="tl"></section></main></div>
+<script>
+var tl=document.getElementById('tl');
+for(var i=0;i<30;i++){
+  var media = i%3===0
+   ? '<div class="mwrap"><div style="padding-bottom:56%;position:relative"><div style="position:absolute;inset:0"><div data-testid="videoPlayer" style="height:100%;background:#000"><div data-testid="videoComponent"><video muted playsinline></video></div><span>0:32</span></div></div></div></div>'
+   : i%3===1 ? '<div class="mwrap"><a href="/u/status/'+i+'/photo/1"><div class="ph" data-testid="tweetPhoto"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></div></a></div>' : '';
+  tl.insertAdjacentHTML('beforeend','<div data-testid="cellInnerDiv" id="c'+i+'"><article><div data-testid="User-Name"><a href="/u">User '+i+'</a> <time>2h</time></div><div data-testid="tweetText">Post number '+i+' with some useful text.</div>'+media+'<div role="group"><button>Reply</button><button>Like</button></div></article></div>');
+}
+
+document.getElementById('c4').insertAdjacentHTML('afterend','<div data-testid="cellInnerDiv" id="ad1"><div data-testid="placementTracking"><article><div data-testid="User-Name"><a href="/b">Brand</a></div><div data-testid="tweetText">Buy our thing now</div><div class="ph" data-testid="tweetPhoto"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></div><div role="group"><button>Like</button></div></article></div></div>');
+document.getElementById('c7').insertAdjacentHTML('afterend','<div data-testid="cellInnerDiv" id="ad2"><article><div data-testid="User-Name"><a href="/c">Other brand</a></div><div><span>Ad</span></div><div data-testid="tweetText">Another promo. Ad</div><div role="group"><button>Like</button></div></article></div>');
+document.getElementById('c8').querySelector('[data-testid=tweetText]').insertAdjacentHTML('beforeend',' <span>Ad</span>');
+</script></body></html>
