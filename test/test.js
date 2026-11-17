@@ -15,7 +15,7 @@ const flat = s => (s || '').replace(/\n/g, ' ');
 
 (async () => {
   const browser = await chromium.launch();
-  async function open(seed, path = '/home') {
+  async function open(seed, path = '/home', opts = {}) {
     const ctx = await browser.newContext({ ...devices['Pixel 7'] });
     const page = await ctx.newPage();
     page.on('pageerror', e => { fails++; console.log('PAGEERROR', e.message); });
@@ -25,6 +25,8 @@ const flat = s => (s || '').replace(/\n/g, ' ');
     await page.addInitScript(script);
     await page.goto('https://x.com' + path);
     await page.clock.runFor(1500);
+    // let the 3-second opening screen pass, unless the test is about it
+    if (seed && seed.limitMin && !opts.keepGate && !path.startsWith('/i/flow')) await page.clock.runFor(3500);
     return { ctx, page };
   }
   const longPress = async (page, sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.move(b.x + 40, b.y + 40); await page.mouse.down(); await page.clock.runFor(700); await page.mouse.up(); await page.clock.runFor(300); };
@@ -151,6 +153,42 @@ const flat = s => (s || '').replace(/\n/g, ' ');
   await page.clock.runFor(5000);
   await longPress(page, '#c1 .ph');
   ok((await sh(page, '.chip.on')).hidden && /No colour time left/.test((await sh(page, '.sub')).text), 'no more colour today');
+  await ctx.close();
+
+  // opening delay: 3 s of black, clock paused, again after being away
+  const dkey = n => { const d = new Date(); const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() - n); const p = v => String(v).padStart(2, '0'); return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`; };
+  ({ ctx, page } = await open({ limitMin: 30, day: today(), usedSec: 100, weekSeen: today(), ts: Date.now() }, '/home', { keepGate: true }));
+  ok(/OPENING X/i.test(await ovText(page) || '') && /^[123]/.test(await ovText(page)), 'opening screen with countdown: ' + flat(await ovText(page)).slice(0, 40));
+  await page.clock.runFor(3000);
+  s = await st(page);
+  ok((await ovText(page)) === null, 'opening screen clears itself after 3 s');
+  await page.clock.runFor(6000);
+  s = await st(page);
+  ok(s.usedSec >= 104 && s.usedSec <= 108, 'opening screen did not use the budget: ' + s.usedSec);
+  await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { get: () => window.__vis || 'visible', configurable: true }); window.__vis = 'hidden'; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.clock.runFor(5000);
+  await page.evaluate(() => { window.__vis = 'visible'; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.clock.runFor(1200);
+  ok((await ovText(page)) === null, 'a 5-second glance away does not bring the opening screen back');
+  await page.evaluate(() => { window.__vis = 'hidden'; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.clock.runFor(20000);
+  await page.evaluate(() => { window.__vis = 'visible'; document.dispatchEvent(new Event('visibilitychange')); });
+  await page.clock.runFor(1200);
+  ok(/OPENING X/i.test(await ovText(page) || ''), 'coming back after 20 s shows it again');
+  await ctx.close();
+
+  // weekly summary: yesterday is recorded at midnight; summary appears once every 7 days
+  const hist = {}; for (let i = 2; i <= 8; i++) hist[dkey(i)] = { u: 600 * (i % 3 + 1), x: i === 3 ? 2 : 0, c: 0 };
+  ({ ctx, page } = await open({ limitMin: 30, day: dkey(1), usedSec: 1500, extCount: 1, extraSec: 300, weekSeen: dkey(8), hist, ts: 5 }));
+  await page.clock.runFor(1500);
+  s = await st(page);
+  ok(s.hist[dkey(1)] && s.hist[dkey(1)].u === 1500 && s.hist[dkey(1)].x === 1 && s.usedSec < 5, 'yesterday saved into history at the day change');
+  t = flat(await ovText(page));
+  const expectMin = Math.round((1500 + [2, 3, 4, 5, 6, 7].reduce((a, i) => a + 600 * (i % 3 + 1), 0)) / 60);
+  ok(/YOUR WEEK ON X/i.test(t) && t.includes(expectMin + ' min in 7 days') && t.includes('extra time taken 3×'), 'weekly summary shows totals: ' + t.slice(0, 120));
+  await page.screenshot({ path: require('path').join(require('os').tmpdir(), 'xf-week.png') });
+  await clickBtn(page, 'OK'); await page.clock.runFor(1500);
+  ok((await ovText(page)) === null && (await st(page)).weekSeen === today(), 'summary dismissed for another week');
   await ctx.close();
 
   // 6. login page untouched, but still grey

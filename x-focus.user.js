@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.1.0
+// @version      2.2.0
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.1.0';
+  var VERSION = '2.2.0';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -37,6 +37,9 @@
 
   var STEP = 300;                 // seconds between check-ins (5 minutes)
   var BLOCK = 600;                // seconds per block in the progress bar (10 minutes)
+  var GATE_WAIT = 3;              // seconds of black screen each time X is opened
+  var REOPEN_AFTER = 15000;       // away this long (ms) counts as opening X again
+  var HIST_DAYS = 14;             // days of history kept for the weekly summary
   var CHECK_WAIT = 60;            // seconds a check-in holds the screen before "Keep going" unlocks
   var KEY = 'xfocus.v1';
   var MIN_LIMIT = 5, MAX_LIMIT = 90, LIMIT_STEP = 5, DEFAULT_LIMIT = 30;
@@ -139,6 +142,10 @@
     '.checks{display:flex;flex-direction:column;gap:14px;width:100%;margin-top:8px}',
     '.check{display:flex;align-items:center;gap:12px;font-size:16px;line-height:1.3;text-align:left;cursor:pointer}',
     '.check input{width:24px;height:24px;flex:none;accent-color:#fff;margin:0}',
+    '.week{display:flex;align-items:flex-end;gap:6px;width:100%}',
+    '.day{flex:1 1 0;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;line-height:1;color:#9a9a9a;font-variant-numeric:tabular-nums}',
+    '.day i{display:block;width:100%;background:#fff;border-radius:2px}',
+    '.day.x i{background:#ff453a}',
     '@media (prefers-reduced-motion:reduce){.bar.low .time,.bar.flash{animation:none}}'
   ].join('\n');
 
@@ -155,6 +162,7 @@
     hideAds: true,
     clean: true,          // hide Grok and Premium upsells
     blackBg: true,        // ask X for its pure-black theme
+    weekSeen: '',         // day the weekly summary was last shown
     day: '',
     usedSec: 0,
     colorUsedSec: 0,
@@ -199,6 +207,19 @@
     }
     if (out.limitMin > MAX_LIMIT) out.limitMin = MAX_LIMIT;
     if (out.pendingLimitMin > MAX_LIMIT) out.pendingLimitMin = MAX_LIMIT;
+    out.hist = cleanHist(o && o.hist);
+    return out;
+  }
+
+  // Per-day totals for past days: { 'YYYY-MM-DD': { u: seconds used, x: extra-time count, c: colour seconds } }.
+  function cleanHist(h) {
+    var out = {};
+    if (!h || typeof h !== 'object') return out;
+    Object.keys(h).filter(function (k) { return /^\d{4}-\d\d-\d\d$/.test(k) && h[k] && typeof h[k] === 'object'; })
+      .sort().slice(-HIST_DAYS).forEach(function (k) {
+        function num(v) { v = Number(v); return isFinite(v) && v > 0 ? Math.round(v) : 0; }
+        out[k] = { u: num(h[k].u), x: num(h[k].x), c: num(h[k].c) };
+      });
     return out;
   }
 
@@ -216,6 +237,10 @@
         if (isFinite(v) && v > out[k]) out[k] = v;
       });
     }
+    var oh = cleanHist(older.hist), all = {};
+    Object.keys(oh).forEach(function (k) { all[k] = oh[k]; });
+    Object.keys(out.hist).forEach(function (k) { all[k] = out.hist[k]; });
+    out.hist = cleanHist(all);
     return out;
   }
 
@@ -270,6 +295,10 @@
   function rollover() {
     var today = todayKey();
     if (state.day === today) return false;
+    if (state.day) {
+      state.hist[state.day] = { u: state.usedSec, x: state.extCount, c: state.colorUsedSec };
+      state.hist = cleanHist(state.hist);
+    }
     state.day = today;
     DAILY.forEach(function (k) { state[k] = 0; });
     if (state.pendingLimitMin && state.pendingFrom && state.pendingFrom <= today) {
@@ -279,6 +308,29 @@
     }
     save();
     return true;
+  }
+
+  function dateOf(key) {
+    var p = key.split('-');
+    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  }
+
+  // The last n days, oldest first; with today, or ending yesterday.
+  function lastDays(n, withToday) {
+    var out = [], now = new Date();
+    for (var i = n - 1; i >= 0; i--) {
+      var d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i - (withToday ? 0 : 1));
+      var k = dayKey(d);
+      var rec = k === state.day ? { u: state.usedSec, x: state.extCount } : (state.hist[k] || { u: 0, x: 0 });
+      out.push({ key: k, letter: 'SMTWTFS'.charAt(d.getDay()), u: rec.u || 0, x: rec.x || 0 });
+    }
+    return out;
+  }
+
+  // The weekly summary shows itself once every seven days.
+  function weekDue() {
+    if (!state.weekSeen) { state.weekSeen = state.day; return false; }
+    return Math.round((dateOf(state.day) - dateOf(state.weekSeen)) / 86400000) >= 7;
   }
 
   function budgetSec() { return state.limitMin * 60 + state.extraSec; }
@@ -718,6 +770,8 @@
     if (!m) { ov.hidden = true; return; }
     endPeek();
     var kids = m === 'setup' ? buildSetup()
+      : m === 'gate' ? buildGate()
+      : m === 'week' ? buildWeek()
       : m === 'checkpoint' ? buildCheckpoint(arg)
       : m === 'lock' ? buildLock()
       : m === 'settings' ? buildSettings()
@@ -768,6 +822,50 @@
         }),
         h('p', { class: 'note', text: 'The clock runs only while X is on screen. You can lower the limit any time; raising it only takes effect the next day.' })
       ]);
+  }
+
+  // Shown for a few seconds every time X is opened.
+  function buildGate() {
+    var endAt = Date.now() + GATE_WAIT * 1000;
+    var big = h('div', { class: 'big', text: String(GATE_WAIT) });
+    big.style.color = ZONES[zoneAt(Math.min(state.usedSec, budgetSec()))];
+    overlayTick = function () {
+      var s = Math.ceil((endAt - Date.now()) / 1000);
+      if (s <= 0) { show(null); return; }
+      big.textContent = String(s);
+    };
+    return [
+      big,
+      h('div', { class: 'cap', text: 'Opening X' }),
+      h('p', { class: 'txt', text: Math.ceil(remainingSec() / 60) + ' min left today. What are you here for?' }),
+      h('button', { class: 'btn ghost', type: 'button', text: 'Not now', onclick: function () { show('bye'); } })
+    ];
+  }
+
+  // Seven bars, one per day, plus the totals. Days with extra time taken are red.
+  function weekView(days) {
+    var max = 1, total = 0, extra = 0, i;
+    for (i = 0; i < days.length; i++) { max = Math.max(max, days[i].u); total += days[i].u; extra += days[i].x; }
+    var chart = h('div', { class: 'week', role: 'img', 'aria-label': 'Minutes of X per day' });
+    for (i = 0; i < days.length; i++) {
+      var barEl = document.createElement('i');
+      barEl.style.height = Math.max(2, Math.round(days[i].u / max * 64)) + 'px';
+      chart.appendChild(h('div', { class: 'day' + (days[i].x ? ' x' : '') }, [
+        h('span', { text: String(Math.round(days[i].u / 60)) }), barEl, h('span', { text: days[i].letter })
+      ]));
+    }
+    var mins = Math.round(total / 60);
+    return [chart, h('p', { class: 'note', text: mins + ' min in 7 days \u00b7 ' + Math.round(mins / 7) +
+      ' a day \u00b7 extra time taken ' + extra + '\u00d7' })];
+  }
+
+  function buildWeek() {
+    return [h('div', { class: 'cap', text: 'Your week on X' })]
+      .concat(weekView(lastDays(7, false)))
+      .concat([h('button', {
+        class: 'btn', type: 'button', text: 'OK',
+        onclick: function () { state.weekSeen = state.day; save(); show(null); }
+      })]);
   }
 
   function buildCheckpoint(cp) {
@@ -904,6 +1002,10 @@
             Math.floor(state.colorUsedSec / 60) + ' of ' + state.colorMin + ' min.'
           : 'This browser cannot show single posts in colour.' }),
         h('div', { class: 'checks' }, [ads.row, clean.row, black.row, posts.row]),
+        h('div', { class: 'cap small', text: 'Last 7 days' })
+      ])
+      .concat(weekView(lastDays(7, true)))
+      .concat([
         h('p', { class: 'note', text: 'Used today: ' + Math.floor(state.usedSec / 60) + ' min' +
           (state.extCount ? ' · extra time taken ' + state.extCount + '×' : '') + ' · v' + VERSION }),
         updateButton(),
@@ -1047,11 +1149,12 @@
     }, true);
     // Lifting the finger after a long press must not open the post.
     document.addEventListener('click', function (e) {
-      if (!swallowClick) return;
-      swallowClick = false;
-      if (e.target === host) return;
-      e.preventDefault();
-      e.stopPropagation();
+      if (e.target === host) { swallowClick = false; return; }
+      if (swallowClick) {
+        swallowClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+      }
     }, true);
   }
 
@@ -1060,6 +1163,7 @@
   /* ------------------------------------------------------------------ */
 
   var lastTick = Date.now();
+  var wantGate = true, hiddenAt = 0;
 
   // Sign-in and sign-out screens stay untouched and unmetered.
   function isAuthPath() {
@@ -1086,6 +1190,7 @@
     }
 
     if (!state.limitMin) {
+      wantGate = false; // first run: straight into X once the limit is chosen
       render();
       show('setup');
       return;
@@ -1094,8 +1199,13 @@
     var visible = document.visibilityState === 'visible';
     var step = Math.min(Math.max(dt, 0), 2);
     var locked = state.usedSec >= budgetSec();
-    // The check-in and goodbye screens do not eat into the day's minutes.
-    if (!locked && visible && mode !== 'bye' && mode !== 'checkpoint') {
+    if (wantGate) {
+      wantGate = false;
+      if (!locked && (!mode || mode === 'settings')) show('gate', Date.now());
+    }
+    // Only time spent in X itself (or its settings) uses the day's minutes;
+    // the opening, check-in, summary and goodbye screens do not.
+    if (!locked && visible && (!mode || mode === 'settings')) {
       state.usedSec = Math.min(state.usedSec + step, budgetSec());
       dirty++;
       locked = state.usedSec >= budgetSec();
@@ -1114,7 +1224,10 @@
       if (mode !== 'lock') { save(); show('lock'); }
     } else {
       if (mode === 'lock') show(null);
-      if (cp > state.ackCp && !mode) show('checkpoint', cp);
+      if (!mode) {
+        if (weekDue()) show('week');
+        else if (cp > state.ackCp) show('checkpoint', cp);
+      }
     }
 
     render();
@@ -1144,8 +1257,11 @@
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible') {
         lastTick = Date.now();
+        if (hiddenAt && Date.now() - hiddenAt >= REOPEN_AFTER) wantGate = true;
+        hiddenAt = 0;
         loadState().then(tick, noop);
       } else {
+        hiddenAt = Date.now();
         endPeek();
         save();
       }

@@ -5,7 +5,9 @@ X (x.com) for one phone, made deliberately less fun:
 - everything in greyscale, on a true black background
 - no video, no ads (each is replaced by a small dotted "hidden" box)
 - a daily time limit shown as a large countdown at the top, coloured blue, yellow and red by thirds
+- a 3-second pause every time X is opened
 - a full-screen check-in every 5 minutes that holds for one minute
+- a weekly summary of minutes used and extra time taken
 - a small daily allowance for seeing a post in colour: hold a finger on its picture
 - Grok and Premium upsells are hidden
 
