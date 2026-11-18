@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.5.0
+// @version      2.5.1
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.5.0';
+  var VERSION = '2.5.1';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -468,10 +468,18 @@
 
   var pendingTab = null;
 
+  // The Home tab strip: a tablist with real tabs that is not part of a post
+  // (photo carousels inside posts are tablists too, and come first on the page).
   function homeTablist() {
     if (window.location.pathname !== '/home') return null;
-    return document.querySelector('[data-testid="primaryColumn"] [role="tablist"]') ||
-      document.querySelector('main [role="tablist"]') || document.querySelector('[role="tablist"]');
+    var lists = document.querySelectorAll('[role="tablist"]');
+    for (var i = 0; i < lists.length; i++) {
+      var l = lists[i];
+      if (l.closest('article, [data-testid="cellInnerDiv"]')) continue;
+      if (l.querySelectorAll('[role="tab"]').length < 2 || hasChip(l)) continue;
+      return l;
+    }
+    return null;
   }
 
   function homeTabs() {
@@ -491,6 +499,11 @@
   // can be hidden; also learns the first list's name for its button.
   function scanTabs() {
     var list = homeTablist();
+    // Drop marks left on anything that is not (or no longer) the Home strip.
+    var marks = document.querySelectorAll('[data-xf-tabs]');
+    for (var m = 0; m < marks.length; m++) {
+      if (!list || !marks[m].contains(list)) marks[m].removeAttribute('data-xf-tabs');
+    }
     if (!list) return;
     var tabs = list.querySelectorAll('[role="tab"]');
     if (tabs[2]) {
@@ -815,11 +828,25 @@
     return !!((el.textContent || '').trim() || el.querySelector('img, svg, video, canvas, a, button, [role="button"]'));
   }
 
+  // Something to read at (x, y): 'cell' inside a post, 'other' for text, a picture
+  // or a button outside posts, false for empty space (an icon alone does not count).
+  function contentAt(x, y) {
+    var el = document.elementFromPoint(x, y);
+    if (!el || el === host) return false;
+    if (el.closest('[data-testid="cellInnerDiv"]')) return 'cell';
+    if (el.closest('img, button, a, [role="button"], [role="link"]')) return 'other';
+    if (!el.childElementCount && (el.textContent || '').trim()) return 'other';
+    return false;
+  }
+
+  var gapOff = '', gapNote = '';
   function fixGap() {
     var strip = document.querySelector('[data-xf-tabs]');
-    var active = strip && state.nav && loggedIn && window.location.pathname === '/home' && !tabsShown;
+    if (strip && strip.closest('article, [data-testid="cellInnerDiv"]')) strip = null;
+    var active = strip && state.nav && loggedIn && window.location.pathname === '/home' && !tabsShown &&
+      gapOff !== window.location.pathname;
     if (!active) { if (gapFixes.length) restoreGap(); return; }
-    if (window.scrollY > 4) return;
+    if (scrollTopNow() > 4) return;
     var head = null, e, n;
     for (e = strip.parentElement, n = 0; e && e !== document.body && n < 8; e = e.parentElement, n++) {
       if (e.style.height) setFix(e, 'height', 'auto');
@@ -827,34 +854,93 @@
       if (pos === 'fixed' || pos === 'sticky') { head = e; break; }
     }
     head = head || strip.parentElement;
-    var col = strip.closest('[data-testid="primaryColumn"]') || document;
-    var cells = col.querySelectorAll('[data-testid="cellInnerDiv"]'), first = null, firstTop = 0;
-    for (var i = 0; i < cells.length; i++) {
+    var cells = document.querySelectorAll('[data-testid="cellInnerDiv"]'), first = null, firstTop = 0, i;
+    for (i = 0; i < cells.length; i++) {
       var r = cells[i].getBoundingClientRect();
       if (r.height > 0) { first = cells[i]; firstTop = r.top; break; }
     }
     if (!first) return;
+    var w = window.innerWidth, xs = [w * 0.2, w * 0.5, w * 0.8], y, k;
+    // A fix already in place must not have slid the first post under anything.
+    if (gapFixes.length) {
+      for (y = firstTop + 4; y < Math.min(firstTop + 260, window.innerHeight - navH); y += 8) {
+        for (k = 0; k < xs.length; k++) {
+          if (contentAt(xs[k], y) === 'other') {
+            restoreGap();
+            gapOff = window.location.pathname;
+            gapNote = 'undone: something covered the first post';
+            return;
+          }
+        }
+      }
+    }
     var bottom = 0;
     var parts = head.querySelectorAll('img, svg, a, button, [role="button"], h1, h2, h3');
     for (i = 0; i < parts.length; i++) {
-      if (parts[i].closest('[data-xf-tabs]')) continue;
+      if (parts[i].closest('[data-xf-tabs], [data-xf-spacecell]')) continue;
       var pr = parts[i].getBoundingClientRect();
       if (pr.height > 0 && pr.bottom > bottom) bottom = pr.bottom;
     }
     if (!bottom) bottom = head.getBoundingClientRect().bottom;
-    var gap = Math.round(firstTop - bottom - 14);
+    // The empty band ends at the first thing to read, post or not.
+    var endY = firstTop;
+    for (y = bottom + 6; y < firstTop; y += 4) {
+      if (contentAt(xs[0], y) || contentAt(xs[1], y) || contentAt(xs[2], y)) { endY = y; break; }
+    }
+    var gap = Math.round(endY - bottom - 14);
     if (gap < 10 || gap > 300) return;
-    for (var a = first; a && a.parentElement && a !== document.body; a = a.parentElement) {
+    // Only inside the page's own content: never the page body or anything above it.
+    for (var a = first; a && a.parentElement && a.parentElement !== document.body &&
+        a.parentElement !== document.documentElement && a.tagName !== 'MAIN'; a = a.parentElement) {
       for (var sib = a.previousElementSibling; sib; sib = sib.previousElementSibling) {
         var sr = sib.getBoundingClientRect();
         if (sr.height >= gap && sr.bottom <= firstTop + 1 && !hasContent(sib)) {
           setFix(sib, 'height', Math.round(sr.height - gap) + 'px');
           setFix(sib, 'min-height', '0px');
+          gapNote = 'spacer -' + gap + 'px';
           return;
         }
       }
       var pt = parseFloat(window.getComputedStyle(a.parentElement).paddingTop) || 0;
-      if (pt >= gap) { setFix(a.parentElement, 'padding-top', Math.round(pt - gap) + 'px'); return; }
+      if (pt >= gap) {
+        setFix(a.parentElement, 'padding-top', Math.round(pt - gap) + 'px');
+        gapNote = 'padding -' + gap + 'px';
+        return;
+      }
+    }
+    gapNote = 'band of ' + gap + 'px, nothing to shrink';
+  }
+
+  // The live Spaces bar: pills with a listener count such as "+381" or "+2.6K".
+  var CHIP = /^\+\d[\d.,]*[KkMm]?$/;
+  function hasChip(el) {
+    var spans = el.querySelectorAll('span');
+    for (var i = 0; i < spans.length && i < 200; i++) {
+      if (!spans[i].childElementCount && CHIP.test((spans[i].textContent || '').trim())) return true;
+    }
+    return false;
+  }
+  function scanLiveBar() {
+    if (!state.clean) return;
+    var home = homeTablist();
+    var spans = document.querySelectorAll('span');
+    for (var i = 0; i < spans.length; i++) {
+      var sp = spans[i];
+      if (sp.childElementCount || !CHIP.test((sp.textContent || '').trim())) continue;
+      if (sp.closest('article, [data-xf-spacecell], [data-testid="tweetText"]')) continue;
+      var cur = sp;
+      for (var n = 0; n < 14; n++) {
+        var p = cur.parentElement;
+        if (!p || p === document.body || p === document.documentElement) break;
+        if ((home && p.contains(home)) ||
+            p.querySelector('article, [data-testid="DashButton_ProfileIcon_Link"], [data-testid="AppTabBar_Home_Link"]')) break;
+        var ph = p.getBoundingClientRect().height, ch = cur.getBoundingClientRect().height;
+        if (ph > Math.max(ch, 30) + 24) break;
+        cur = p;
+        var pos = window.getComputedStyle(cur).position;
+        if (pos === 'fixed' || pos === 'sticky') break;
+      }
+      cur.setAttribute('data-xf-spacecell', '');
     }
   }
 
@@ -1510,7 +1596,9 @@
       ' app=' + !!NATIVE + ' gapFixes=' + gapFixes.length);
     L.push('last tab press: ' + (lastTabTry || 'none') + ' | real taps: ' + canNativeTap() +
       ' | button touches ' + navTouches + ', clicks ' + navClicks + ' | tabs ' + homeTabs().length +
-      ' | scroller ' + short(feedScroller()) + ' top=' + Math.round(scrollTopNow()));
+      ' | scroller ' + short(feedScroller()) + ' top=' + Math.round(scrollTopNow()) +
+      ' | tablists ' + document.querySelectorAll('[role="tablist"]').length + ', in posts ' +
+      document.querySelectorAll('article [role="tablist"], [data-testid="cellInnerDiv"] [role="tablist"]').length);
     L.push('== what the three buttons did');
     navLog.forEach(function (m) { L.push(m); });
     L.push('== what is under each button');
@@ -1521,6 +1609,31 @@
     var list = homeTablist();
     L.push('== tab strip and its parents');
     for (e = list, n = 0; e && e !== document.documentElement && n < 16; e = e.parentElement, n++) L.push(describe(e));
+    L.push('gap: ' + (gapNote || 'none') + (gapOff ? ' (off here)' : ''));
+    L.push('== header');
+    var hdr = null;
+    for (e = list; e && e !== document.body; e = e.parentElement) {
+      var hp = window.getComputedStyle(e).position;
+      if (hp === 'fixed' || hp === 'sticky') hdr = e;
+    }
+    if (hdr) {
+      var hc = 0;
+      (function walk(el, d) {
+        if (hc++ > 120) return;
+        L.push(new Array(d + 1).join(' ') + describe(el));
+        if (el === list || el.tagName === 'svg') return;
+        for (var c = el.firstElementChild; c; c = c.nextElementSibling) walk(c, d + 1);
+      })(hdr, 0);
+      L.push('== from the header down to the first post');
+      var hb = Math.round(hdr.getBoundingClientRect().bottom), prev = '';
+      for (var yy = Math.max(0, hb - 60); yy < hb + 260; yy += 6) {
+        var line = (document.elementsFromPoint(window.innerWidth / 2, yy) || []).slice(0, 3).map(short).join(' > ');
+        if (line !== prev) L.push('y' + yy + ': ' + line);
+        prev = line;
+      }
+    } else {
+      L.push('(no fixed or sticky header found)');
+    }
     L.push('== inside the first two tabs');
     var tabs = homeTabs();
     for (i = 0; i < tabs.length && i < 2; i++) {
@@ -1533,7 +1646,7 @@
     L.push('== top of the page');
     var col = document.querySelector('[data-testid="primaryColumn"]') || document.body, count = 0;
     (function walk(el, d) {
-      if (count > 260) return;
+      if (count > 120) return;
       var r = el.getBoundingClientRect();
       if (el !== col && (r.top > 520 || (r.bottom < -40 && r.height > 0))) return;
       count++;
@@ -1918,6 +2031,7 @@
       try { scanSpaces(); } catch (e3) {}
       try { scanTabs(); } catch (e4) {}
       try { scanCarousels(); } catch (e7) {}
+      try { scanLiveBar(); } catch (e9) {}
       try { fixGap(); } catch (e8) {}
       try { applyFlags(); tryPendingTab(); } catch (e5) {}
       try { if (bar && loaded) renderNav(); } catch (e6) {}

@@ -1,6 +1,7 @@
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 body{margin:0;font:15px system-ui;background:#fff}
 #hdr{position:sticky;top:0;background:#fff;z-index:3;border-bottom:1px solid #ccc;display:flex;flex-direction:column;color:#1d9bf0;font-weight:700}
+#hdrwrap{display:contents}
 #logo{height:53px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;position:relative}
 #logo h2{margin:0}
 #tabsnav{height:53px;position:relative}
@@ -16,7 +17,7 @@ article{padding:12px;border-bottom:1px solid #ddd}
 </style></head><body><div id="react-root">
 <div id="layers"><div class="bb" data-testid="BottomBar"><a data-testid="AppTabBar_Home_Link" href="/home">Home</a> <a data-testid="AppTabBar_Explore_Link" href="/explore">Search</a> <a data-testid="AppTabBar_Notifications_Link" href="/notifications" aria-label="Notifications (3 unread items)">Notif</a> <a data-testid="AppTabBar_DirectMessage_Link" href="/i/chat">Chat</a></div>
 <div id="fab" data-testid="FloatingActionButtons_Tweet_Button" style="position:fixed;right:16px;bottom:16px;width:56px;height:56px;border-radius:50%;background:#1d9bf0"></div><div class="modal" id="modal"><div id="modaltop" style="display:flex;justify-content:space-between;padding:12px"><button>✕</button><button id="postbtn">Post</button></div><textarea>compose</textarea></div></div>
-<main><div data-testid="primaryColumn"><div id="hdr" style="height: 106px;"><div id="logo"><a data-testid="DashButton_ProfileIcon_Link" href="/u"><img alt="me" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="24" height="24"></a> <h2>X</h2></div><nav id="tabsnav" role="navigation"><div data-testid="ScrollSnap-SwipeableList"><div role="tablist"><div role="presentation"><a role="tab" href="/home" aria-selected="true"><div class="press"><span>For you</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>Following</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>Builders</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>News</span></div></a></div></div><button aria-label="Next"><svg width="10" height="10"></svg></button></div></nav></div><section id="tl"></section></div></main></div>
+<main><div id="hdrwrap"><div id="hdr" style="height: 106px;"><div id="logo"><a data-testid="DashButton_ProfileIcon_Link" href="/u"><img alt="me" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="24" height="24"></a> <h2>X</h2></div><nav id="tabsnav" role="navigation"><div data-testid="ScrollSnap-SwipeableList"><div role="tablist"><div role="presentation"><a role="tab" href="/home" aria-selected="true"><div class="press"><span>For you</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>Following</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>Builders</span></div></a></div><div role="presentation"><a role="tab" href="/home" aria-selected="false"><div class="press"><span>News</span></div></a></div></div><button aria-label="Next"><svg width="10" height="10"></svg></button></div></nav></div></div><div data-testid="primaryColumn"><section id="tl"></section></div></main></div>
 <script>
 var tl=document.getElementById('tl');
 for(var i=0;i<30;i++){
@@ -44,7 +45,9 @@ document.querySelectorAll('[role=tab]').forEach(function (t) {
 document.querySelector('[data-testid=AppTabBar_Home_Link]').addEventListener('click', function (e) {
   if (location.pathname === '/home') { e.preventDefault(); window.__homeRefresh = (window.__homeRefresh || 0) + 1; }
 });
+document.querySelector('#c1 .ph').insertAdjacentHTML('beforeend','<div data-testid="ScrollSnap-List" role="tablist" id="carousel" style="display:flex;overflow-x:auto;height:40px"><div style="flex:none;width:300px">photo 1</div><div style="flex:none;width:300px">photo 2</div></div>');
 document.getElementById('c5').querySelector('[data-testid=tweetText]').insertAdjacentHTML('afterend','<div data-testid="card.wrapper"><a href="/i/spaces/1abc">LIVE Space: big talk</a><span>420 listening</span></div>');
+document.getElementById('tl').insertAdjacentHTML('beforebegin','<div id="onebar" style="padding:8px 12px"><div role="button" style="height:32px;border-radius:16px;background:#ccc;display:flex;align-items:center;gap:6px;padding:0 10px"><span>+381</span><span>·</span><span>Nifty set to see breather</span></div></div>');
 document.getElementById('c0').insertAdjacentHTML('beforebegin','<div data-testid="cellInnerDiv" id="livebar"><div class="live"><div role="button">+2.6K · NVIDIA EARNINGS LIVE</div><div role="button">+1.7K · Another live one</div></div></div>');
 document.getElementById('c0').insertAdjacentHTML('beforebegin','<div data-testid="cellInnerDiv" id="spacebar"><div><a href="/i/spaces/2def">Live now</a> <a href="/i/spaces/3ghi">Another space</a></div></div>');
 </script></body></html>
