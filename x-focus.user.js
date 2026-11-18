@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Focus
 // @namespace    x-focus
-// @version      2.5.1
+// @version      2.6.0
 // @description  X without video or ads, in greyscale, with a daily time budget and a check-in every 5 minutes.
 // @match        https://x.com/*
 // @match        https://mobile.x.com/*
@@ -25,7 +25,7 @@
   if (window.__xFocusOn) return;
   window.__xFocusOn = true;
 
-  var VERSION = '2.5.1';
+  var VERSION = '2.6.0';
 
   // Present only inside the X Focus Android app.
   var NATIVE = null;
@@ -840,75 +840,88 @@
   }
 
   var gapOff = '', gapNote = '';
+
+  // X starts the feed below the full header (avatar row, tabs, live bar) even
+  // when parts of it are gone. Move the feed up to sit right under what is left,
+  // then make sure nothing covers the first post; if something does, undo it.
   function fixGap() {
     var strip = document.querySelector('[data-xf-tabs]');
     if (strip && strip.closest('article, [data-testid="cellInnerDiv"]')) strip = null;
-    var active = strip && state.nav && loggedIn && window.location.pathname === '/home' && !tabsShown &&
-      gapOff !== window.location.pathname;
+    var col = document.querySelector('[data-testid="primaryColumn"]');
+    var active = strip && col && !col.contains(strip) && state.nav && loggedIn &&
+      window.location.pathname === '/home' && !tabsShown && gapOff !== window.location.pathname;
     if (!active) { if (gapFixes.length) restoreGap(); return; }
     if (scrollTopNow() > 4) return;
-    var head = null, e, n;
+    var head = null, e, n, i;
     for (e = strip.parentElement, n = 0; e && e !== document.body && n < 8; e = e.parentElement, n++) {
       if (e.style.height) setFix(e, 'height', 'auto');
       var pos = window.getComputedStyle(e).position;
       if (pos === 'fixed' || pos === 'sticky') { head = e; break; }
     }
     head = head || strip.parentElement;
-    var cells = document.querySelectorAll('[data-testid="cellInnerDiv"]'), first = null, firstTop = 0, i;
+    var navBar = head.matches('[data-testid="TopNavBar"]') ? head : head.querySelector('[data-testid="TopNavBar"]');
+    var navBottom = 0;
+    if (navBar) {
+      navBottom = navBar.getBoundingClientRect().bottom;
+    } else {
+      var parts = head.querySelectorAll('img, svg, a, button, [role="button"], h1, h2, h3');
+      for (i = 0; i < parts.length; i++) {
+        if (parts[i].closest('[data-xf-tabs], [data-xf-spacecell]')) continue;
+        var pr = parts[i].getBoundingClientRect();
+        if (pr.height > 0 && pr.bottom > navBottom) navBottom = pr.bottom;
+      }
+    }
+    // Wait until X's header has been moved below the timer.
+    if (!navBottom || navBottom <= barH + 4) return;
+    var cells = document.querySelectorAll('[data-testid="cellInnerDiv"]'), firstTop = -1;
     for (i = 0; i < cells.length; i++) {
       var r = cells[i].getBoundingClientRect();
-      if (r.height > 0) { first = cells[i]; firstTop = r.top; break; }
+      if (r.height > 0) { firstTop = r.top; break; }
     }
-    if (!first) return;
-    var w = window.innerWidth, xs = [w * 0.2, w * 0.5, w * 0.8], y, k;
-    // A fix already in place must not have slid the first post under anything.
+    if (firstTop < 0) return;
+    var shift = Math.round(col.getBoundingClientRect().top - navBottom);
+    if (Math.abs(shift) <= 3) {
+      // In place: now make sure nothing from the header covers the first post.
     if (gapFixes.length) {
-      for (y = firstTop + 4; y < Math.min(firstTop + 260, window.innerHeight - navH); y += 8) {
-        for (k = 0; k < xs.length; k++) {
-          if (contentAt(xs[k], y) === 'other') {
-            restoreGap();
-            gapOff = window.location.pathname;
-            gapNote = 'undone: something covered the first post';
-            return;
+        // Only the header can end up over the feed through this; pop-ups do not count.
+        var headRoot = head;
+        while (headRoot.parentElement && headRoot.parentElement !== document.body && !headRoot.parentElement.contains(col)) {
+          headRoot = headRoot.parentElement;
+        }
+        var w = window.innerWidth, xs = [w * 0.2, w * 0.5, w * 0.8];
+        for (var y = firstTop + 6; y < Math.min(firstTop + 160, window.innerHeight - navH - 4); y += 12) {
+          for (var k = 0; k < xs.length; k++) {
+            var hit = document.elementFromPoint(xs[k], y);
+            if (hit && hit !== host && headRoot.contains(hit)) {
+              restoreGap();
+              gapOff = window.location.pathname;
+              gapNote = 'undone: ' + short(hit) + ' covered the first post';
+              return;
+            }
           }
         }
       }
+      return;
     }
-    var bottom = 0;
-    var parts = head.querySelectorAll('img, svg, a, button, [role="button"], h1, h2, h3');
-    for (i = 0; i < parts.length; i++) {
-      if (parts[i].closest('[data-xf-tabs], [data-xf-spacecell]')) continue;
-      var pr = parts[i].getBoundingClientRect();
-      if (pr.height > 0 && pr.bottom > bottom) bottom = pr.bottom;
+    var next = (parseFloat(col.style.getPropertyValue('margin-top')) || 0) - shift;
+    if (next > 0 || next < -400) { gapNote = 'shift of ' + shift + 'px left alone'; return; }
+    setFix(col, 'margin-top', next + 'px');
+    gapNote = 'feed moved up ' + (-next) + 'px';
+  }
+
+  // True when p shows nothing outside inner: no text, picture or button of its own.
+  function onlyHolds(p, inner) {
+    var all = p.querySelectorAll('*');
+    for (var i = 0; i < all.length && i < 400; i++) {
+      var d = all[i];
+      if (inner.contains(d)) continue;
+      var visual = d.matches('img, svg, video, canvas, button, a, input, [role="button"], [role="link"], [role="tab"]');
+      var text = !d.childElementCount && (d.textContent || '').trim();
+      if (!visual && !text) continue;
+      var r = d.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return false;
     }
-    if (!bottom) bottom = head.getBoundingClientRect().bottom;
-    // The empty band ends at the first thing to read, post or not.
-    var endY = firstTop;
-    for (y = bottom + 6; y < firstTop; y += 4) {
-      if (contentAt(xs[0], y) || contentAt(xs[1], y) || contentAt(xs[2], y)) { endY = y; break; }
-    }
-    var gap = Math.round(endY - bottom - 14);
-    if (gap < 10 || gap > 300) return;
-    // Only inside the page's own content: never the page body or anything above it.
-    for (var a = first; a && a.parentElement && a.parentElement !== document.body &&
-        a.parentElement !== document.documentElement && a.tagName !== 'MAIN'; a = a.parentElement) {
-      for (var sib = a.previousElementSibling; sib; sib = sib.previousElementSibling) {
-        var sr = sib.getBoundingClientRect();
-        if (sr.height >= gap && sr.bottom <= firstTop + 1 && !hasContent(sib)) {
-          setFix(sib, 'height', Math.round(sr.height - gap) + 'px');
-          setFix(sib, 'min-height', '0px');
-          gapNote = 'spacer -' + gap + 'px';
-          return;
-        }
-      }
-      var pt = parseFloat(window.getComputedStyle(a.parentElement).paddingTop) || 0;
-      if (pt >= gap) {
-        setFix(a.parentElement, 'padding-top', Math.round(pt - gap) + 'px');
-        gapNote = 'padding -' + gap + 'px';
-        return;
-      }
-    }
-    gapNote = 'band of ' + gap + 'px, nothing to shrink';
+    return true;
   }
 
   // The live Spaces bar: pills with a listener count such as "+381" or "+2.6K".
@@ -941,6 +954,16 @@
         if (pos === 'fixed' || pos === 'sticky') break;
       }
       cur.setAttribute('data-xf-spacecell', '');
+      // Also the empty slot X keeps for the bar, so it cannot sit over the feed.
+      for (n = 0; n < 10; n++) {
+        var up = cur.parentElement;
+        if (!up || up === document.body || up === document.documentElement) break;
+        var upPos = window.getComputedStyle(up).position;
+        if (upPos === 'fixed' || upPos === 'sticky' || !onlyHolds(up, cur)) break;
+        cur.removeAttribute('data-xf-spacecell');
+        up.setAttribute('data-xf-spacecell', '');
+        cur = up;
+      }
     }
   }
 
@@ -2032,10 +2055,10 @@
       try { scanTabs(); } catch (e4) {}
       try { scanCarousels(); } catch (e7) {}
       try { scanLiveBar(); } catch (e9) {}
-      try { fixGap(); } catch (e8) {}
       try { applyFlags(); tryPendingTab(); } catch (e5) {}
       try { if (bar && loaded) renderNav(); } catch (e6) {}
       try { adjustLayout(); } catch (e2) {}
+      try { fixGap(); } catch (e8) {}
     }, 200);
   }
 
